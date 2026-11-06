@@ -65,7 +65,7 @@ test('red indicator follows actual capture, not permission, stopped audio or upl
     assert.equal(primary.firstChild, label, 'Timer renders must not restart label animation');
     assert.equal(document.querySelector('[role="status"]'), status);
     assert.equal(status.textContent, 'Идёт запись', 'Live region must not announce every timer tick');
-    processor.onaudioprocess({ inputBuffer: { numberOfChannels: 2, getChannelData: () => new Float32Array([0, 0.25]) } });
+    await React.act(() => processor.onaudioprocess({ inputBuffer: { numberOfChannels: 2, getChannelData: () => new Float32Array([0, 0.25]) } }));
     await React.act(() => voice.stop());
     assert.equal(indicator(), null, 'Stopped/ready audio is not recording');
     assert.equal(stopped, 1); assert.equal(closed, 1);
@@ -76,7 +76,7 @@ test('red indicator follows actual capture, not permission, stopped audio or upl
     await React.act(() => voice.cancel());
     assert.equal(indicator(), null);
     assert.equal(button(), primary);
-    assert.equal(primary.textContent, '🎙 Записать');
+    assert.equal(primary.textContent, 'Записать');
     for (const control of document.querySelectorAll('button')) assert.equal(control.type, 'button');
   } finally {
     await React.act(() => { root.unmount(); disposers.forEach(fn => fn()); });

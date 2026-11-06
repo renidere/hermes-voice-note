@@ -25,7 +25,7 @@ await writeFile(fixturePath, fixture);
 let resolveResult;
 const finished = new Promise(resolve => { resolveResult = resolve; });
 const requests = [];
-const sdk = `export const atom = initial => { let v = initial; return { get: () => v, set: n => { v = n; } }; };\nexport const host = {}; export const Button = 'button'; export const COMPOSER_AREAS = {actions:'composer.actions'}; export const useValue = a => a.get();`;
+const sdk = `export const atom = initial => { let v = initial; return { get: () => v, set: n => { v = n; } }; };\nexport const host = {}; export const Button = 'button'; export const Codicon = 'i'; export const COMPOSER_AREAS = {actions:'composer.actions'}; export const useValue = a => a.get();`;
 const react = 'export const useEffect = () => {}; export const useState = v => [v, () => {}];';
 const jsx = 'export const jsx = (type, props) => ({type,props}); export const jsxs = jsx;';
 const page = `<!doctype html><meta charset="utf-8"><title>Voice note capture smoke</title>
@@ -112,8 +112,15 @@ try {
   console.log(JSON.stringify(report, null, 2));
 } finally {
   clearTimeout(timer);
-  if (chrome?.pid) { try { process.kill(-chrome.pid, 'SIGTERM'); } catch {} }
+  if (chrome?.pid && chrome.exitCode === null && chrome.signalCode === null) {
+    const exited = new Promise(resolve => chrome.once('exit', resolve));
+    const killTimer = setTimeout(() => { try { process.kill(-chrome.pid, 'SIGKILL'); } catch {} }, 2000);
+    killTimer.unref();
+    try { process.kill(-chrome.pid, 'SIGTERM'); } catch {}
+    await exited;
+    clearTimeout(killTimer);
+  }
   await writeFile(join(out, 'chrome.stderr.log'), stderr);
   await new Promise(resolve => server.close(resolve));
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

@@ -22,7 +22,7 @@ export async function loadPlugin(overrides = {}, sdkOverrides = {}, moduleOverri
       return { get: () => value, set(v) { value = v; for (const fn of listeners) fn(v); },
         subscribe(fn) { listeners.add(fn); fn(value); return () => listeners.delete(fn); } };
     },
-    host: {}, COMPOSER_AREAS: { actions: 'composer.actions' }, Button: 'button',
+    host: {}, COMPOSER_AREAS: { actions: 'composer.actions' }, Button: 'button', Codicon: 'i',
     useValue: store => store.get(), ...sdkOverrides,
   };
   const modules = {

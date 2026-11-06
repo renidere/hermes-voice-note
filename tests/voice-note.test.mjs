@@ -233,14 +233,14 @@ test('the plugin contributes Record and Send controls and stops capture when dis
   assert.equal(contributions[0].area, 'composer.actions');
   const element = contributions[0].render();
   const render = () => element.type(element.props);
-  const record = findButton(render(), '🎙 Записать');
+  const record = findButton(render(), 'Записать');
   assert.ok(record);
   await record.props.onClick();
   assert.ok(findButton(render(), 'Отправить'));
   feed(capture);
   await findButton(render(), 'Отправить').props.onClick();
   assert.equal(calls.filter(([name]) => name === 'submit').length, 1);
-  await findButton(render(), '🎙 Записать').props.onClick();
+  await findButton(render(), 'Записать').props.onClick();
   cleanup.forEach(fn => fn());
   assert.equal(capture.tracksStopped, 2);
 });
@@ -300,7 +300,7 @@ test('the window warns before discarding a pending voice recording and removes t
   plugin.default.register({ register: value => contributions.push(value), onDispose: fn => cleanup.push(fn) });
   assert.ok(listeners.has('beforeunload'), 'Pending-recording protection is missing');
   const element = contributions[0].render();
-  await findButton(element.type(element.props), '🎙 Записать').props.onClick();
+  await findButton(element.type(element.props), 'Записать').props.onClick();
   let prevented = false;
   listeners.get('beforeunload')({ preventDefault() { prevented = true; } });
   assert.equal(prevented, true);

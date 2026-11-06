@@ -1,4 +1,4 @@
-import { atom, host, Button, COMPOSER_AREAS, useValue } from '@hermes/plugin-sdk';
+import { atom, host, Button, Codicon, COMPOSER_AREAS, useValue } from '@hermes/plugin-sdk';
 import { useEffect, useState } from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
 
@@ -41,6 +41,8 @@ export class VoiceNote {
   constructor(host) {
     this.host = host;
     this.state = atom({ phase: 'idle', error: '', startedAt: 0 });
+    this.level = atom(0);
+    this.levelAt = -Infinity;
     this.chunks = [];
     this.generation = 0;
   }
@@ -49,6 +51,8 @@ export class VoiceNote {
 
   async start() {
     if (this.state.get().phase !== 'idle') return;
+    this.level.set(0);
+    this.levelAt = -Infinity;
     const generation = ++this.generation;
     const target = this.target = {
       live: this.host.state.focusedSessionId.get(),
@@ -93,6 +97,17 @@ export class VoiceNote {
         this.capturedBytes += chunk[0].length * chunk.length * 2;
         if (this.capturedBytes > 64 * 1024 * 1024) { this.reachLimit(); return; }
         this.chunks.push(chunk);
+        const now = Date.now();
+        if (now - this.levelAt < 100) return;
+        this.levelAt = now;
+        let level = 0;
+        for (const channel of chunk) {
+          let sum = 0;
+          for (const sample of channel) sum += sample * sample;
+          const rms = Math.sqrt(sum / channel.length);
+          if (Number.isFinite(rms)) level = Math.max(level, rms);
+        }
+        this.level.set(Math.min(1, level));
       };
       this.source.connect(this.processor);
       this.processor.connect(this.context.destination);
@@ -116,6 +131,8 @@ export class VoiceNote {
   }
 
   releaseCapture() {
+    this.level.set(0);
+    this.levelAt = -Infinity;
     clearTimeout(this.limitTimer);
     if (this.processor) { this.processor.onaudioprocess = null; this.processor.disconnect(); }
     this.source?.disconnect();
@@ -198,41 +215,55 @@ function VoiceControls({ voice }) {
   const seconds = Math.max(0, Math.floor((now - state.startedAt) / 1000));
   const elapsed = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
   const status = state.phase === 'recording' ? elapsed
-    : state.phase === 'starting' ? 'Доступ к микрофону…'
+    : state.phase === 'starting' ? 'Микрофон…'
     : state.phase === 'sending' ? 'Отправка…'
-    : state.phase === 'ready' ? 'Запись готова' : '';
+    : state.phase === 'ready' ? 'Готово' : '';
   const idle = state.phase === 'idle';
   return jsxs('div', { className: 'hermes-voice-note', 'data-phase': state.phase, children: [
     jsx('style', { children: `
-      .hermes-voice-note { display:grid; grid-template-columns:minmax(0,1fr) 104px 64px; align-items:center; gap:6px; width:340px; max-width:100%; min-height:32px; }
-      .hermes-voice-note .hermes-voice-note__info { display:grid; min-width:0; color:var(--ui-text-secondary); font-variant-numeric:tabular-nums; }
-      .hermes-voice-note .hermes-voice-note__status, .hermes-voice-note .hermes-voice-note__error { grid-area:1/1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .hermes-voice-note .hermes-voice-note__dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--ui-red); }
+      .hermes-voice-note { position:relative; display:inline-flex; align-items:center; gap:4px; width:max-content; max-width:100%; min-height:28px; }
+      .hermes-voice-note .hermes-voice-note__info { display:flex; align-items:center; gap:6px; width:80px; min-width:0; color:var(--ui-text-secondary); font-variant-numeric:tabular-nums; }
+      .hermes-voice-note .hermes-voice-note__status { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+      .hermes-voice-note .hermes-voice-note__dot { flex:none; width:6px; height:6px; border-radius:50%; background:var(--ui-red); }
+      .hermes-voice-note .hermes-voice-note__meter { display:inline-flex; flex:none; align-items:center; gap:2px; width:14px; height:12px; color:var(--ui-text-secondary); }
+      .hermes-voice-note .hermes-voice-note__meter span { display:block; width:2px; border-radius:1px; background:currentColor; transition:transform 100ms linear, opacity 100ms linear; }
       .hermes-voice-note .hermes-voice-note__label, .hermes-voice-note .hermes-voice-note__error { animation:hermes-voice-note-fade 160ms ease-out; }
-      .hermes-voice-note button { min-width:0; transition:opacity 160ms ease, background-color 160ms ease, color 160ms ease; }
-      .hermes-voice-note .hermes-voice-note__cancel { transition:opacity 160ms ease, visibility 160ms; }
-      .hermes-voice-note[data-phase="idle"] .hermes-voice-note__cancel { opacity:0; visibility:hidden; pointer-events:none; }
+      .hermes-voice-note button { display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; min-width:0; padding:0; transition:opacity 160ms ease, background-color 160ms ease, color 160ms ease; }
+      .hermes-voice-note .hermes-voice-note__label { display:inline-flex; align-items:center; gap:5px; }
+      .hermes-voice-note .hermes-voice-note__cancel { animation:hermes-voice-note-fade 160ms ease-out; }
+      .hermes-voice-note[data-phase="idle"] .hermes-voice-note__info, .hermes-voice-note[data-phase="idle"] .hermes-voice-note__cancel { display:none; }
+      .hermes-voice-note[data-phase="idle"] .hermes-voice-note__primary { width:auto; padding:0 8px; }
+      .hermes-voice-note .hermes-voice-note__error { position:absolute; bottom:calc(100% + 6px); left:0; z-index:10; width:max-content; max-width:min(260px,80vw); padding:6px 8px; border:1px solid var(--ui-stroke-secondary); border-radius:4px; background:var(--ui-bg-quaternary); color:var(--ui-text-secondary); font-size:12px; }
       .hermes-voice-note .hermes-voice-note__sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
       @keyframes hermes-voice-note-fade { from { opacity:0; } to { opacity:1; } }
       @media (prefers-reduced-motion:reduce) {
         .hermes-voice-note, .hermes-voice-note *, .hermes-voice-note *::before, .hermes-voice-note *::after { animation:none !important; transition:none !important; }
       }
     ` }),
+    jsx('span', { role: 'status', className: 'hermes-voice-note__sr', children: state.phase === 'recording' ? 'Идёт запись' : status }),
     jsxs('span', { className: 'hermes-voice-note__info', children: [
-      jsx('span', { role: 'status', className: 'hermes-voice-note__sr', children: state.phase === 'recording' ? 'Идёт запись' : status }),
-      jsxs('span', { className: 'hermes-voice-note__status', 'aria-hidden': true, style: { visibility: state.error ? 'hidden' : undefined }, children: [
+      jsxs('span', { className: 'hermes-voice-note__status', 'aria-hidden':true, children: [
         state.phase === 'recording' && jsx('span', { className: 'hermes-voice-note__dot', 'aria-hidden': true }),
         jsx('span', { className: 'hermes-voice-note__label', children: status }, state.phase),
       ] }),
-      state.error && jsx('span', { role: 'alert', title: state.error, className: 'hermes-voice-note__error', children: state.error }),
+      state.phase === 'recording' && jsx(SignalMeter, { voice }),
     ] }),
-    jsx(Button, { type: 'button', variant: 'ghost', size: 'sm', disabled: !['idle', 'recording', 'ready'].includes(state.phase),
+    state.error && jsx('span', { role: 'alert', title: state.error, className: 'hermes-voice-note__error', children: state.error }),
+    jsx(Button, { type: 'button', variant: 'ghost', size: idle ? 'sm' : 'icon-xs', className: 'hermes-voice-note__primary',
+      title: idle ? 'Записать голосовое сообщение' : 'Отправить запись', 'aria-label': idle ? 'Записать' : 'Отправить', disabled: !['idle', 'recording', 'ready'].includes(state.phase),
       onClick: () => (voice.state.get().phase === 'idle' ? voice.start() : voice.send()).catch(() => {}),
-      children: jsx('span', { className: 'hermes-voice-note__label', children: idle ? '🎙 Записать' : 'Отправить' }, idle ? 'record' : 'send') }),
-    jsx(Button, { type: 'button', variant: 'ghost', size: 'sm', className: 'hermes-voice-note__cancel',
+      children: jsxs('span', { className: 'hermes-voice-note__label', children: [jsx(Codicon, { name: idle ? 'mic' : 'send', size:14 }), jsx('span', { className: idle ? undefined : 'hermes-voice-note__sr', children: idle ? 'Записать' : 'Отправить' })] }, idle ? 'record' : 'send') }),
+    jsx(Button, { type: 'button', variant: 'ghost', size: 'icon-xs', className: 'hermes-voice-note__cancel', title: 'Отменить запись', 'aria-label': 'Отмена',
       disabled: idle, tabIndex: idle ? -1 : undefined, 'aria-hidden': idle, inert: idle,
-      onClick: () => voice.cancel(), children: 'Отмена' }),
+      onClick: () => voice.cancel(), children: jsxs('span', { className: 'hermes-voice-note__label', children: [jsx(Codicon, { name:'close', size:14 }), jsx('span', { className:'hermes-voice-note__sr', children:'Отмена' })] }) }),
   ] });
+}
+
+function SignalMeter({ voice }) {
+  const rms = useValue(voice.level);
+  const level = Math.max(0, Math.min(1, (20 * Math.log10(Math.max(rms, 1e-6)) + 60) / 48));
+  return jsx('span', { className:'hermes-voice-note__meter', role:'meter', 'aria-label':'Входной сигнал', 'aria-valuemin':0, 'aria-valuemax':100, 'aria-valuenow':Math.round(level * 100), title:'Сигнал с микрофона',
+    children:[6,12,8].map((height, index) => jsx('span', { 'aria-hidden':true, style:{ height, transform:`scaleY(${0.2 + level * 0.8})`, opacity:0.3 + level * 0.7 } }, index)) });
 }
 
 export default {

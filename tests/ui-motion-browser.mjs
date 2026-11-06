@@ -20,6 +20,7 @@ const profile = await mkdtemp(join(process.env.TMPDIR || join(root, 'evidence'),
 const sdk = `
 import {useSyncExternalStore} from 'react';
 export {Button} from ${JSON.stringify(join(hermes, 'apps/desktop/src/components/ui/button.tsx'))};
+export {Codicon} from ${JSON.stringify(join(hermes, 'apps/desktop/src/components/ui/codicon.tsx'))};
 export const atom = initial => { let value = initial; const listeners = new Set(); return {get:()=>value,set:v=>{value=v;listeners.forEach(fn=>fn());},subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}}; };
 export const useValue = store => useSyncExternalStore(store.subscribe,store.get);
 export const COMPOSER_AREAS = {actions:'composer.actions'};
@@ -55,9 +56,11 @@ const built = await build({ stdin: { contents: entry, resolveDir: hermes, loader
     b.onResolve({ filter: /^@\// }, args => ({ path: resolve(hermes, 'apps/desktop/src', args.path.slice(2) + (args.path === '@/lib/utils' ? '.ts' : args.path === '@/lib/icons' ? '.ts' : '')) }));
   } }] });
 const styles = await readFile(join(hermes, 'apps/desktop/src/styles.css'), 'utf8');
+const codiconCss = await readFile(join(root, 'node_modules/@vscode/codicons/dist/codicon.css'));
+const codiconFont = await readFile(join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf'));
 const token = name => [...styles.matchAll(new RegExp(`${name}:\\s*([^;]+);`, 'g'))].at(-1)?.[1];
 assert.ok(token('--ui-red'), 'Use a verified Hermes theme token');
-const html = `<!doctype html><meta charset="utf-8"><title>Voice-note UI — local fixture</title>
+const html = `<!doctype html><meta charset="utf-8"><title>Voice-note UI — local fixture</title><link rel="stylesheet" href="/codicon.css">
 <style>
 :root { --ui-red:${token('--ui-red')}; --ui-text-secondary:${token('--ui-text-secondary')}; --ui-text-primary:${token('--ui-text-primary')}; --ui-text-tertiary:${token('--ui-text-tertiary')}; --ui-bg-quaternary:${token('--ui-bg-quaternary')}; --chrome-action-hover:${token('--chrome-action-hover')}; }
 body { margin:40px; background:#18181b; color:#eee; font:13px system-ui; }
@@ -71,6 +74,8 @@ button:disabled { opacity:.5; } button:hover { background:var(--chrome-action-ho
 const server = createServer((req,res) => {
   if (req.url === '/') res.writeHead(200, {'Content-Type':'text/html'}).end(html);
   else if (req.url === '/bundle.js') res.writeHead(200, {'Content-Type':'text/javascript'}).end(built.outputFiles[0].contents);
+  else if (req.url === '/codicon.css') res.writeHead(200, {'Content-Type':'text/css'}).end(codiconCss);
+  else if (req.url.startsWith('/codicon.ttf')) res.writeHead(200, {'Content-Type':'font/ttf'}).end(codiconFont);
   else res.writeHead(404).end();
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -112,7 +117,12 @@ try {
     await cdp('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:motion}]});
     await cdp('Page.navigate',{url});
     await wait(`window.fixture && document.querySelector('#voice button')`);
-    await evaluate(`window.primary=document.querySelector('#voice button');window.box=()=>{const r=document.querySelector('.hermes-voice-note').getBoundingClientRect(),b=primary.getBoundingClientRect();return {width:r.width,height:r.height,left:b.left,buttonWidth:b.width};}; window.idleBox=box();primary.click();`);
+    await evaluate('document.fonts.ready.then(()=>true)');
+    await evaluate(`window.primary=document.querySelector('#voice button');window.box=()=>{const r=document.querySelector('.hermes-voice-note').getBoundingClientRect(),b=primary.getBoundingClientRect();return {width:r.width,height:r.height,left:b.left,buttonWidth:b.width};}; window.idleBox=box();`);
+    const idleSize=await evaluate('idleBox');
+    assert.ok(idleSize.width<=112, `Idle toolbar must fit one ordinary button, got ${idleSize.width}px`);
+    await screenshot(`${motion}-idle.png`);
+    await evaluate('primary.click()');
     await wait(`fixture.voice.state.get().phase==='starting'`);
     assert.equal(await evaluate(`!!document.querySelector('.hermes-voice-note__dot')`),false);
     const animation=await evaluate(`(()=>{const el=primary.firstElementChild;return el?{name:getComputedStyle(el).animationName,duration:getComputedStyle(el).animationDuration}:null;})()`);
@@ -127,6 +137,15 @@ try {
     assert.ok(recording.dot && recording.dot!=='rgba(0, 0, 0, 0)','Recording dot must resolve to a visible theme red');
     assert.equal(await evaluate(`(()=>{const x=document.createElement('span');x.style.background='var(--ui-red)';document.body.append(x);const c=getComputedStyle(x).backgroundColor;x.remove();return c;})()`),recording.dot);
     assert.equal(recording.status,'Идёт запись');
+    await wait(`Number(document.querySelector('[role="meter"]')?.getAttribute('aria-valuenow'))>0`);
+    const signal=await evaluate(`(()=>{const m=document.querySelector('[role="meter"]');return {value:Number(m.getAttribute('aria-valuenow')),width:m.getBoundingClientRect().width,bars:m.querySelectorAll('span').length};})()`);
+    assert.ok(signal.value>0 && signal.value<=100, 'Real microphone frames must reach the meter');
+    assert.ok(signal.width<=16 && signal.bars===3, 'Signal feedback must stay a tiny three-stroke indicator');
+    const narrow=await evaluate(`(()=>{const f=document.querySelector('form');f.style.width='180px';const r=document.querySelector('.hermes-voice-note').getBoundingClientRect(),p=primary.getBoundingClientRect(),i=document.querySelector('.hermes-voice-note__info').getBoundingClientRect(),b=f.getBoundingClientRect();return {width:r.width,inside:r.right<=b.right,nonoverlap:i.right<=p.left};})()`);
+    assert.ok(narrow.width<=180 && narrow.inside && narrow.nonoverlap, 'Compact controls must fit a narrow composer without overlap');
+    await screenshot(`${motion}-narrow-recording.png`);
+    await evaluate(`document.querySelector('form').style.width='620px'`);
+    assert.equal(await evaluate(`[...document.querySelectorAll('#voice button')].every(b=>b.getAttribute('aria-label') && b.title)`),true,'Icon actions need accessible names and hints');
     await delay(1200);
     assert.equal(await evaluate(`primary===document.querySelector('#voice button') && label===primary.firstElementChild && visual===document.querySelector('.hermes-voice-note__status') && live.textContent==='Идёт запись'`),true,'Timer must preserve DOM identity and quiet live status');
     assert.equal(await evaluate(`document.querySelector('.hermes-voice-note__status').textContent.includes('00:01')`),true,'Real timer must advance');
@@ -141,8 +160,11 @@ try {
     assert.ok(await evaluate(`document.querySelector('[role="alert"]').textContent.includes('осталась')`),'Retry must retain the existing error UX');
     await screenshot(`${motion}-retry.png`);
     const dimensions=await evaluate(`({idle:idleBox,ready:box()})`);
-    for(const key of Object.keys(dimensions.idle)) assert.ok(Math.abs(dimensions.idle[key]-dimensions.ready[key])<=1,`Stable layout: ${key}`);
-    for(const key of Object.keys(dimensions.idle)) assert.ok(Math.abs(dimensions.idle[key]-recording.box[key])<=1,`Stable recording layout: ${key}`);
+    for(const [phase,box] of Object.entries({recording:recording.box,ready:dimensions.ready})) {
+      assert.ok(box.width<=190, `${phase} controls must remain compact, got ${box.width}px`);
+      assert.ok(box.height<=32, `${phase} controls must remain a single toolbar row`);
+      assert.ok(box.buttonWidth>=24 && box.buttonWidth<=32, 'Active actions must be usable icon buttons');
+    }
     await evaluate('fixture.offline=false;primary.click()');
     await wait(`fixture.voice.state.get().phase==='sending'`);
     await evaluate('fixture.finishRetain()');

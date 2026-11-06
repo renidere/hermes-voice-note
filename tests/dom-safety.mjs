@@ -54,10 +54,10 @@ async function click(label) {
   assert.equal(document.querySelector('textarea').value, 'Этот черновик не нужно отправлять');
 }
 try {
-  await click('🎙 Записать');
+  await click('Записать');
   processor.onaudioprocess({ inputBuffer: { numberOfChannels: 2, getChannelData: () => new Float32Array([0, 0.25]) } });
   await click('Отправить');
-  await click('🎙 Записать');
+  await click('Записать');
   await click('Отмена');
   assert.equal(explicitVoiceSubmits, 1);
   console.log(JSON.stringify({ passed: true, scope: 'Native jsdom form click with real plugin render and fixture SDK Button contract', checked: ['record', 'send', 'cancel'], unexpected_form_submits: unexpectedSubmits, draft_preserved: true, explicit_voice_submits: explicitVoiceSubmits }));
