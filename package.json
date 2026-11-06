@@ -1,0 +1,24 @@
+{
+  "name": "hermes-voice-note",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "description": "Voice-note WAV attachments for Hermes Desktop",
+  "license": "MIT",
+  "author": "renidere",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/renidere/hermes-voice-note.git"
+  },
+  "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs",
+    "test:dom": "node --experimental-vm-modules tests/dom-safety.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "test:ui-browser": "node tests/ui-motion-browser.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

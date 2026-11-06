@@ -1,0 +1,11 @@
+node_modules/
+evidence/
+coverage/
+.env
+.env.*
+*.log
+*.wav
+*.mp3
+*.webm
+*.zip
+.DS_Store
