@@ -35,7 +35,9 @@ test('Windows delivery builds the patched client before publishing an artifact',
   const sdk = job.steps.find(step => step.id === 'test-sdk');
   assert.match(sdk.run, /session-request\.test\.ts/);
   assert.match(job.steps.find(step => step.id === 'test-composer').run, /use-composer-submit\.test\.tsx/);
-  assert.match(job.steps.find(step => step.id === 'package-client').run, /--win zip --x64 --publish never/);
+  const packageCommand = job.steps.find(step => step.id === 'package-client').run;
+  assert.match(packageCommand, /^node apps\/desktop\/scripts\/run-electron-builder\.mjs /, 'pnpm must not split builder -c dotted overrides');
+  assert.match(packageCommand, /--win zip --x64 --publish never/);
   const upload = job.steps.find(step => step.id === 'upload-package');
   assert.equal(upload.if, 'success()');
   assert.equal(upload.with['if-no-files-found'], 'error');

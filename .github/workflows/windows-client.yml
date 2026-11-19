@@ -93,7 +93,7 @@ jobs:
         run: pnpm --dir apps/desktop build
       - id: package-client
         working-directory: hermes
-        run: pnpm --dir apps/desktop builder --win zip --x64 --publish never -c.extraMetadata.version=0.4.1
+        run: node apps/desktop/scripts/run-electron-builder.mjs --win zip --x64 --publish never "--config.extraMetadata.version=0.4.1"
       - id: verify-package
         run: |
           $release = Join-Path $PWD 'hermes/apps/desktop/release'
@@ -109,6 +109,11 @@ jobs:
             if ([System.IO.File]::ReadAllText($bundle.FullName).Contains('retainSession')) { $containsSdk = $true }
           }
           if (-not $containsSdk) { throw 'Packaged renderer is missing native session SDK' }
+          $manifest = Get-Content voice-note/install/windows-client-source.json -Raw | ConvertFrom-Json
+          foreach ($entry in $manifest.files.PSObject.Properties) {
+            $actual = (Get-FileHash (Join-Path 'hermes' $entry.Name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -cne $entry.Value) { throw "Post-build source mismatch: $($entry.Name)" }
+          }
           $packages = @(Get-ChildItem $release -Filter '*.zip' -File)
           if ($packages.Count -ne 1) { throw 'Expected exactly one Windows ZIP' }
           New-Item delivery -ItemType Directory -Force | Out-Null
