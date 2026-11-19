@@ -113,7 +113,7 @@ try {
     $env:HOME = $env:USERPROFILE
     $env:HERMES_HOME = Join-Path $root 'inherited stable home'
     $env:HERMES_DESKTOP_USER_DATA_DIR = Join-Path $root 'inherited stable desktop'
-    foreach ($homePath in @($env:HERMES_HOME, $env:HERMES_DESKTOP_USER_DATA_DIR, $env:APPDATA, $env:USERPROFILE)) {
+    foreach ($homePath in @($env:HERMES_HOME, $env:HERMES_DESKTOP_USER_DATA_DIR, $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE, (Join-Path $env:USERPROFILE 'AppData\Roaming'), (Join-Path $env:USERPROFILE 'AppData\Local'))) {
         [void][IO.Directory]::CreateDirectory($homePath)
     }
     [IO.File]::WriteAllText((Join-Path $env:HERMES_HOME 'sentinel.txt'), $fixture)
@@ -251,7 +251,18 @@ public static class VoiceBundledWindow {
         Assert ((Hash $exe) -ceq $exeHash -and (Hash $entrypoint) -ceq $launcherHash) 'FIXTURE_PRODUCT_BYTES_CHANGED'
         $result.staleDiskCopyShadowed = $true
         $result.launchesVerified = $attempt
-        Stop-Fixture
+        # Repeated normal launches require graceful Chromium storage shutdown, not taskkill.
+        $closeRequested = $false
+        foreach ($identity in @(Fixture-Processes)) {
+            $candidate = Get-Process -Id $identity.ProcessId -ErrorAction SilentlyContinue
+            if ($candidate -and $candidate.Path -ieq $identity.ExecutablePath -and [Math]::Abs(($candidate.StartTime.ToUniversalTime() - $identity.CreationDate.ToUniversalTime()).TotalMilliseconds) -lt 1 -and $candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                if ($candidate.CloseMainWindow()) { $closeRequested = $true }
+            }
+        }
+        Assert $closeRequested 'GRACEFUL_NATIVE_CLOSE_NOT_REQUESTED'
+        $closeUntil = $clock.Elapsed.TotalSeconds + 8
+        while (@(Fixture-Processes).Count -gt 0 -and $clock.Elapsed.TotalSeconds -lt $closeUntil) { Start-Sleep -Milliseconds 200 }
+        Assert (@(Fixture-Processes).Count -eq 0) 'GRACEFUL_NATIVE_CLOSE_FAILED'
     }
     $result.repeatLaunchVerified = $true
     $result.passed = $true
@@ -262,6 +273,25 @@ public static class VoiceBundledWindow {
     $message = $_.Exception.Message
     $result.error = if ($message.StartsWith('VOICE_SMOKE:')) { $message.Substring(12) } else { 'WINDOWS_PREREQUISITE_OR_NATIVE_API_FAILURE' }
 } finally {
+    try {
+        $result['fixtureProcessCount'] = @(Fixture-Processes).Count
+        if ($homesReady) {
+            $expectedHome = Join-Path $env:LOCALAPPDATA 'HermesVoiceNote\desktop\hermes-home'
+            $desktopLog = Join-Path $expectedHome 'logs\desktop.log'
+            if (Test-Path -LiteralPath $desktopLog) { Copy-Item -LiteralPath $desktopLog -Destination (Join-Path $output 'desktop.log') }
+            $wrongLog = Join-Path $env:HERMES_HOME 'logs\desktop.log'
+            if (Test-Path -LiteralPath $wrongLog) { Copy-Item -LiteralPath $wrongLog -Destination (Join-Path $output 'inherited-home-desktop.log') }
+        }
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object Drawing.Bitmap($screen.Width, $screen.Height)
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($screen.X, $screen.Y, 0, 0, $screen.Size)
+            $bitmap.Save((Join-Path $output 'native-window.png'), [Drawing.Imaging.ImageFormat]::Png)
+        } finally { $graphics.Dispose(); $bitmap.Dispose() }
+    } catch { $result['diagnosticCaptureFailed'] = $true }
     try {
         Stop-Fixture
         if ($guardSnapshotReady) {
