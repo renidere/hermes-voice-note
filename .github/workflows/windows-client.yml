@@ -3,7 +3,7 @@ name: Windows client with voice SDK
 on:
   workflow_dispatch:
   push:
-    branches: [windows-sdk-delivery]
+    branches: [windows-bundled-delivery]
 
 permissions:
   contents: read
@@ -53,6 +53,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git apply -- ../voice-note/install/hermes-desktop-session-transport.patch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: bundle-plugin
+        working-directory: hermes/apps/desktop
+        run: |
+          New-Item src/plugins/hermes-voice-note -ItemType Directory -Force | Out-Null
+          Copy-Item ../../../voice-note/plugin.js src/plugins/hermes-voice-note/plugin.js
       - id: verify-source
         working-directory: hermes
         run: |
@@ -81,6 +86,11 @@ jobs:
         env:
           NODE_OPTIONS: --require=${{ github.workspace }}/voice-note/tests/deny-test-network.cjs
         run: pnpm exec vitest run --project ui src/app/chat/composer/hooks/use-composer-submit.test.tsx src/app/chat/composer/focus.test.ts
+      - name: Verify stale disk copy cannot replace the bundled plugin
+        working-directory: hermes/apps/desktop
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/voice-note/tests/deny-test-network.cjs
+        run: pnpm exec vitest run --project ui src/contrib/runtime-loader.test.ts -t 'bundled-shadowed disk copies'
       - id: test-plugin
         working-directory: voice-note
         run: |
@@ -88,12 +98,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/bundled-launcher.test.mjs tests/delivery-entrypoint.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - id: build-client
         working-directory: hermes
         run: pnpm --dir apps/desktop build
       - id: package-client
         working-directory: hermes
-        run: node apps/desktop/scripts/run-electron-builder.mjs --win zip --x64 --publish never "--config.extraMetadata.version=0.4.1"
+        run: node apps/desktop/scripts/run-electron-builder.mjs --win zip --x64 --publish never "--config.extraMetadata.version=0.4.2"
       - id: verify-package
         run: |
           $release = Join-Path $PWD 'hermes/apps/desktop/release'
@@ -118,12 +130,36 @@ jobs:
           if ($packages.Count -ne 1) { throw 'Expected exactly one Windows ZIP' }
           New-Item delivery -ItemType Directory -Force | Out-Null
           Copy-Item $packages[0].FullName delivery/Hermes-Voice-SDK-Windows-x64.zip
+          Copy-Item voice-note/install/Start-Voice-Note.cmd (Join-Path $release 'win-unpacked/Start-Voice-Note.cmd')
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::Open((Join-Path $PWD 'delivery/Hermes-Voice-SDK-Windows-x64.zip'), 'Update')
+          try {
+            $extras = [ordered]@{ 'Start-Voice-Note.cmd'='voice-note/install/Start-Voice-Note.cmd'; 'WINDOWS-CLIENT.ru.md'='voice-note/WINDOWS-CLIENT.ru.md'; 'HERMES-LICENSE.txt'='hermes/LICENSE'; 'VOICE-NOTE-LICENSE.txt'='voice-note/LICENSE' }
+            foreach ($entry in $extras.GetEnumerator()) {
+              if ($archive.GetEntry($entry.Key)) { throw "Duplicate delivery entry: $($entry.Key)" }
+              [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $PWD $entry.Value), $entry.Key)
+            }
+          } finally { $archive.Dispose() }
           Copy-Item voice-note/plugin.js delivery/plugin.js
           Copy-Item voice-note/install/windows-client-source.json delivery/windows-client-source.json
           $packageHash = (Get-FileHash delivery/Hermes-Voice-SDK-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; runId=$env:GITHUB_RUN_ID; coreCommit=$env:HERMES_BUILD_COMMIT; variant='light'; platform='win32'; arch='x64'; sdkPresent=$true; packageSha256=$packageHash; actualUserDeliveryVerified=$false }
+          $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; runId=$env:GITHUB_RUN_ID; coreCommit=$env:HERMES_BUILD_COMMIT; clientVersion='0.4.2'; variant='light'; platform='win32'; arch='x64'; sdkPresent=$true; pluginBundled=$true; packageSha256=$packageHash; actualUserDeliveryVerified=$false }
           $receipt | ConvertTo-Json | Set-Content delivery/windows-build.json -Encoding utf8NoBOM
           "$packageHash  Hermes-Voice-SDK-Windows-x64.zip" | Set-Content delivery/WINDOWS-SHA256SUMS -Encoding utf8NoBOM
+      - id: smoke-bundled
+        run: |
+          $client = (Resolve-Path hermes/apps/desktop/release/win-unpacked).Path
+          $launcher = Join-Path $client 'Start-Voice-Note.cmd'
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File voice-note/tests/windows-bundled-smoke.ps1 -ClientDirectory $client -Launcher $launcher -OutputDirectory (Join-Path $PWD 'delivery/native-proof')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: finalize-receipt
+        run: |
+          $proof = Get-Content delivery/native-proof/result.json -Raw | ConvertFrom-Json
+          if (-not $proof.passed -or -not $proof.nativeSdkVerified -or -not $proof.recordControlObserved) { throw 'Bundled recorder/native SDK acceptance did not pass' }
+          $receipt = Get-Content delivery/windows-build.json -Raw | ConvertFrom-Json
+          $receipt | Add-Member -NotePropertyName nativeSdkVerified -NotePropertyValue $true
+          $receipt | Add-Member -NotePropertyName recordControlObserved -NotePropertyValue $true
+          $receipt | ConvertTo-Json | Set-Content delivery/windows-build.json -Encoding utf8NoBOM
       - id: upload-package
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -131,4 +167,12 @@ jobs:
           name: windows-voice-sdk-x64
           path: delivery/*
           if-no-files-found: error
+          retention-days: 1
+      - name: Preserve isolated native diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-bundled-failure
+          path: delivery/native-proof/*
+          if-no-files-found: ignore
           retention-days: 1

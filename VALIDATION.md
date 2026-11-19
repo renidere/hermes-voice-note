@@ -1,4 +1,15 @@
-# Проверки комплекта 0.4.1
+# Проверки комплекта 0.4.2
+
+## 0.4.2: встроенная поставка
+
+Плагин копируется в штатный `apps/desktop/src/plugins/hermes-voice-note/plugin.js` до сборки renderer. Больше не требуется устанавливать дисковый плагин после скачивания клиента. Используются существующие Vite glob и защита `bundled` от старой дисковой копии; SDK guard и проверки ACK/WAV не менялись.
+
+- Workflow и `Start-Voice-Note.cmd` имеют сохранённые RED → unchanged FIRSTGREEN. Исторический этап отсутствующего автоматического PS installer на Windows также сохранён, но этот отдельный installer исключён из итогового решения в пользу штатного bundled-механизма.
+- Оригинальная сборка 0.4.1 дополнительно проверена через настоящий скомпилированный SDK/disk-loader/blob-shim и явный `plugin.register(ctx)`: один `record` contribution, ноль compatibility notifications/network attempts. Это изолированный VM/JSDOM контроль, не native Windows.
+- Новый Windows workflow требует совместной сборки SDK/плагина, проверки девяти input hashes и запуска реального packaged EXE с наблюдением SDK и DOM-кнопки. Публикация разрешена только после прохождения `smoke-bundled` и проверки `recordControlObserved` в его фактическом result.json. Точный run и binary hash поставляются в `windows-build.json`; наличие workflow само по себе не считается PASS.
+- Маленький CMD только задаёт отдельные process-scoped home/userData и запрещает регистрацию глобального `hermes://`. Он не использует PowerShell, Git, npm, копирование плагинов, удаление данных или provider API.
+
+Ниже сохранены результаты предыдущих этапов. Они не подменяют Windows gate нового выпуска или проверку пользовательского микрофона/чата.
 
 ## Windows-сборка 0.4.1
 

@@ -21,7 +21,7 @@ test('Windows delivery builds the patched client before publishing an artifact',
   assert.equal(job.env.HERMES_DESKTOP_VARIANT, 'light');
   assert.equal(job.env.HERMES_BUILD_COMMIT, '3b421578588243f920886e6fe79a6faa87ea026e');
   const ids = job.steps.filter(step => step.id).map(step => step.id);
-  assert.deepEqual(ids, ['checkout-plugin', 'checkout-core', 'apply-sdk', 'verify-source', 'test-sdk', 'test-composer', 'test-plugin', 'build-client', 'package-client', 'verify-package', 'upload-package']);
+  assert.deepEqual(ids, ['checkout-plugin', 'checkout-core', 'apply-sdk', 'bundle-plugin', 'verify-source', 'test-sdk', 'test-composer', 'test-plugin', 'build-client', 'package-client', 'verify-package', 'smoke-bundled', 'finalize-receipt', 'upload-package']);
   for (const step of job.steps.filter(step => step.uses)) {
     assert.match(step.uses, /^[\w/-]+@[a-f0-9]{40}$/);
     if (step.uses.startsWith('actions/checkout@')) assert.equal(step.with['persist-credentials'], false);
@@ -32,6 +32,9 @@ test('Windows delivery builds the patched client before publishing an artifact',
   const apply = job.steps.find(step => step.id === 'apply-sdk').run;
   assert.match(apply, /git apply --check/);
   assert.match(apply, /git apply -- /);
+  assert.match(job.steps.find(step => step.id === 'bundle-plugin').run, /Copy-Item .*plugin\.js src\/plugins\/hermes-voice-note\/plugin\.js/);
+  assert.match(job.steps.find(step => step.id === 'smoke-bundled').run, /windows-bundled-smoke\.ps1/);
+  assert.match(job.steps.find(step => step.id === 'finalize-receipt').run, /recordControlObserved/);
   const sdk = job.steps.find(step => step.id === 'test-sdk');
   assert.match(sdk.run, /session-request\.test\.ts/);
   assert.match(job.steps.find(step => step.id === 'test-composer').run, /use-composer-submit\.test\.tsx/);

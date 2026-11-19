@@ -8,6 +8,7 @@
   "arch": "x64",
   "officialNousSignature": false,
   "files": {
+    "apps/desktop/src/plugins/hermes-voice-note/plugin.js": "f43fb41c02231c92c43726b512517cdacc1745e03f502870e26a24e663029110",
     "apps/desktop/src/app/chat/composer/focus.ts": "10f356f87d53e81874239b224f82f9379037637bbd675022ea70913454a23ec4",
     "apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx": "5506a66a3725502e08865cb5af1ac0256d12f9ee2bc893cc2ac63d2191498020",
     "apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts": "0cfc6292e95a6308835773a561d68d81d5a4d848dfca422c0d5582cb5b7684cd",
