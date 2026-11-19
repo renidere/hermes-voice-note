@@ -1,0 +1,20 @@
+{
+  "coreRepository": "NousResearch/hermes-agent",
+  "coreCommit": "3b421578588243f920886e6fe79a6faa87ea026e",
+  "sdkPatchSha256": "9edc267cf5d9606fa7d08da6cb7a086a2e929f3ae9929e9ebf8560598135b01d",
+  "pluginSha256": "f43fb41c02231c92c43726b512517cdacc1745e03f502870e26a24e663029110",
+  "variant": "light",
+  "platform": "win32",
+  "arch": "x64",
+  "officialNousSignature": false,
+  "files": {
+    "apps/desktop/src/app/chat/composer/focus.ts": "10f356f87d53e81874239b224f82f9379037637bbd675022ea70913454a23ec4",
+    "apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx": "5506a66a3725502e08865cb5af1ac0256d12f9ee2bc893cc2ac63d2191498020",
+    "apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts": "0cfc6292e95a6308835773a561d68d81d5a4d848dfca422c0d5582cb5b7684cd",
+    "apps/desktop/src/sdk/index.ts": "a4cc66ff0886ffd37fd59a97ce04d203216e3c6142b914da2cd53936fb53f192",
+    "apps/desktop/src/sdk/session-request.test.ts": "e2c1847bef5b2e9d62378f7c6ebbb03cfa52d5d09133c6f6c61ef6273cdcdb67",
+    "apps/desktop/src/sdk/session-request.ts": "765d1d252e4ec863010d6228f99816dd2ff4e9ddf6723f3f370dcb7dea5d7c43",
+    "apps/desktop/vitest.session-request.config.ts": "d74a26ac96f03f1adb42d3ad8be4ad89563110848cd4e831fcce758e21e42877",
+    "website/docs/developer-guide/desktop-plugin-sdk.md": "01cf0c254c299ab4e2d216e256be8ba303ce2e15d06597744dc2870fcc04709a"
+  }
+}

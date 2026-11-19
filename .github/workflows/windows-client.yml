@@ -1,0 +1,129 @@
+name: Windows client with voice SDK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-sdk-delivery]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-voice-sdk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-client:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      HERMES_DESKTOP_VARIANT: light
+      HERMES_BUILD_COMMIT: 3b421578588243f920886e6fe79a6faa87ea026e
+      HERMES_HOME: ${{ runner.temp }}/hermes-voice-sdk-home
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Preserve reviewed source bytes
+        run: git config --global core.autocrlf false
+      - id: checkout-plugin
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: voice-note
+          persist-credentials: false
+      - id: checkout-core
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 3b421578588243f920886e6fe79a6faa87ea026e
+          path: hermes
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 26.7.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 12.15.0
+          run_install: false
+      - id: apply-sdk
+        working-directory: hermes
+        run: |
+          git apply --check -- ../voice-note/install/hermes-desktop-session-transport.patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git apply -- ../voice-note/install/hermes-desktop-session-transport.patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: verify-source
+        working-directory: hermes
+        run: |
+          $manifest = Get-Content ../voice-note/install/windows-client-source.json -Raw | ConvertFrom-Json
+          $patchHash = (Get-FileHash ../voice-note/install/hermes-desktop-session-transport.patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -cne $manifest.sdkPatchSha256) { throw 'SDK patch differs from reviewed input' }
+          foreach ($entry in $manifest.files.PSObject.Properties) {
+            $actual = (Get-FileHash $entry.Name -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -cne $entry.Value) { throw "Source mismatch: $($entry.Name)" }
+          }
+      - name: Install frozen build dependencies
+        working-directory: hermes
+        run: pnpm --filter hermes... install --frozen-lockfile --ignore-scripts
+      - name: Validate delivery workflow
+        working-directory: voice-note
+        env:
+          HERMES_SOURCE_ROOT: ${{ github.workspace }}/hermes
+        run: node --test tests/windows-delivery-contract.mjs
+      - id: test-sdk
+        working-directory: hermes/apps/desktop
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/voice-note/tests/deny-test-network.cjs
+        run: pnpm exec vitest run --project ui src/sdk/host-state.test.ts src/sdk/profile-routing.test.ts src/sdk/session-request.test.ts
+      - id: test-composer
+        working-directory: hermes/apps/desktop
+        env:
+          NODE_OPTIONS: --require=${{ github.workspace }}/voice-note/tests/deny-test-network.cjs
+        run: pnpm exec vitest run --project ui src/app/chat/composer/hooks/use-composer-submit.test.tsx src/app/chat/composer/focus.test.ts
+      - id: test-plugin
+        working-directory: voice-note
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: build-client
+        working-directory: hermes
+        run: pnpm --dir apps/desktop build
+      - id: package-client
+        working-directory: hermes
+        run: pnpm --dir apps/desktop builder --win zip --x64 --publish never -c.extraMetadata.version=0.4.1
+      - id: verify-package
+        run: |
+          $release = Join-Path $PWD 'hermes/apps/desktop/release'
+          $exe = Join-Path $release 'win-unpacked/hermes-light-3b42157.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Missing Windows PE executable' }
+          $pe = [BitConverter]::ToInt32($bytes, 60)
+          if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw 'Executable is not Windows x64' }
+          $dist = Join-Path $release 'win-unpacked/resources/app.asar.unpacked/dist'
+          $bundles = Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -in '.js', '.mjs' }
+          $containsSdk = $false
+          foreach ($bundle in $bundles) {
+            if ([System.IO.File]::ReadAllText($bundle.FullName).Contains('retainSession')) { $containsSdk = $true }
+          }
+          if (-not $containsSdk) { throw 'Packaged renderer is missing native session SDK' }
+          $packages = @(Get-ChildItem $release -Filter '*.zip' -File)
+          if ($packages.Count -ne 1) { throw 'Expected exactly one Windows ZIP' }
+          New-Item delivery -ItemType Directory -Force | Out-Null
+          Copy-Item $packages[0].FullName delivery/Hermes-Voice-SDK-Windows-x64.zip
+          Copy-Item voice-note/plugin.js delivery/plugin.js
+          Copy-Item voice-note/install/windows-client-source.json delivery/windows-client-source.json
+          $packageHash = (Get-FileHash delivery/Hermes-Voice-SDK-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; runId=$env:GITHUB_RUN_ID; coreCommit=$env:HERMES_BUILD_COMMIT; variant='light'; platform='win32'; arch='x64'; sdkPresent=$true; packageSha256=$packageHash; actualUserDeliveryVerified=$false }
+          $receipt | ConvertTo-Json | Set-Content delivery/windows-build.json -Encoding utf8NoBOM
+          "$packageHash  Hermes-Voice-SDK-Windows-x64.zip" | Set-Content delivery/WINDOWS-SHA256SUMS -Encoding utf8NoBOM
+      - id: upload-package
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-voice-sdk-x64
+          path: delivery/*
+          if-no-files-found: error
+          retention-days: 1
