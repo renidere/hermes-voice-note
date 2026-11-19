@@ -45,8 +45,8 @@ jobs:
                 attempt=$attempt; profile=[string]$r.Profile; profileType=$r.Profile.GetType().FullName
                 profileAny=($r.Profile -eq 'Any'); primary=[string]$r.PrimaryStatus; primaryOK=($r.PrimaryStatus -eq 'OK')
                 enforcement=[string]$r.EnforcementStatus; enforcementPropertyType=$r.EnforcementStatus.GetType().FullName
-                enforcementCount=$es.Count; enforcementFirst=[string]$es[0]; enforcementFirstInt=[int]$es[0]
-                sourceGuardFirstInt=[int]$r.EnforcementStatus[0]; sourceGuard=($r.Profile -eq 'Any' -and $r.PrimaryStatus -eq 'OK' -and $es.Count -eq 1 -and [int]$r.EnforcementStatus[0] -eq 1)
+                enforcementCount=$es.Count; enforcementValues=@($es | ForEach-Object { [string]$_ })
+                enforcementTypes=@($es | ForEach-Object { $_.GetType().FullName })
               }
               Start-Sleep -Milliseconds 500
             }
