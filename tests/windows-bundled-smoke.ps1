@@ -263,6 +263,25 @@ public static class VoiceBundledWindow {
     $result.error = if ($message.StartsWith('VOICE_SMOKE:')) { $message.Substring(12) } else { 'WINDOWS_PREREQUISITE_OR_NATIVE_API_FAILURE' }
 } finally {
     try {
+        $result['fixtureProcessCount'] = @(Fixture-Processes).Count
+        if ($homesReady) {
+            $expectedHome = Join-Path $env:LOCALAPPDATA 'HermesVoiceNote\desktop\hermes-home'
+            $desktopLog = Join-Path $expectedHome 'logs\desktop.log'
+            if (Test-Path -LiteralPath $desktopLog) { Copy-Item -LiteralPath $desktopLog -Destination (Join-Path $output 'desktop.log') }
+            $wrongLog = Join-Path $env:HERMES_HOME 'logs\desktop.log'
+            if (Test-Path -LiteralPath $wrongLog) { Copy-Item -LiteralPath $wrongLog -Destination (Join-Path $output 'inherited-home-desktop.log') }
+        }
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $screen = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object Drawing.Bitmap($screen.Width, $screen.Height)
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($screen.X, $screen.Y, 0, 0, $screen.Size)
+            $bitmap.Save((Join-Path $output 'native-window.png'), [Drawing.Imaging.ImageFormat]::Png)
+        } finally { $graphics.Dispose(); $bitmap.Dispose() }
+    } catch { $result['diagnosticCaptureFailed'] = $true }
+    try {
         Stop-Fixture
         if ($guardSnapshotReady) {
             Assert ((Protocol-Snapshot) -ceq $protocol) 'PROTOCOL_REGISTRATION_CHANGED'

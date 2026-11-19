@@ -1,0 +1,45 @@
+name: Windows packaged native acceptance
+on:
+  push:
+    branches: [windows-native-acceptance]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - name: Preserve source bytes
+        shell: powershell
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Download immutable unqualified build candidate
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 44579671841 --repo renidere/hermes-voice-note --name windows-bundled-failure --dir candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $zip = Join-Path $PWD 'candidate/Hermes-Voice-SDK-Windows-x64.zip'
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne '0b4b71276b0d166582043b0b6700a7a4560d530b425a7fc259db11728bf3db89') { throw 'CANDIDATE_HASH_MISMATCH' }
+          Expand-Archive -LiteralPath $zip -DestinationPath client
+      - name: Actual packaged SDK and Record DOM
+        shell: powershell
+        run: |
+          $client = (Resolve-Path client).Path
+          $launcher = Join-Path $client 'Start-Voice-Note.cmd'
+          $proof = Join-Path $PWD 'native-proof'
+          & ./tests/windows-bundled-smoke.ps1 -ClientDirectory $client -Launcher $launcher -OutputDirectory $proof
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve isolated acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-native-acceptance-proof
+          path: native-proof/*
+          retention-days: 2
+          if-no-files-found: warn
