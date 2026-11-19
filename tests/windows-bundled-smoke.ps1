@@ -113,7 +113,7 @@ try {
     $env:HOME = $env:USERPROFILE
     $env:HERMES_HOME = Join-Path $root 'inherited stable home'
     $env:HERMES_DESKTOP_USER_DATA_DIR = Join-Path $root 'inherited stable desktop'
-    foreach ($homePath in @($env:HERMES_HOME, $env:HERMES_DESKTOP_USER_DATA_DIR, $env:APPDATA, $env:USERPROFILE)) {
+    foreach ($homePath in @($env:HERMES_HOME, $env:HERMES_DESKTOP_USER_DATA_DIR, $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE, (Join-Path $env:USERPROFILE 'AppData\Roaming'), (Join-Path $env:USERPROFILE 'AppData\Local'))) {
         [void][IO.Directory]::CreateDirectory($homePath)
     }
     [IO.File]::WriteAllText((Join-Path $env:HERMES_HOME 'sentinel.txt'), $fixture)
