@@ -20,7 +20,7 @@ jobs:
       CI: 'true'
       HERMES_DESKTOP_VARIANT: light
       HERMES_BUILD_COMMIT: 3b421578588243f920886e6fe79a6faa87ea026e
-      HERMES_HOME: ${{ runner.temp }}/hermes-voice-sdk-home
+      HERMES_HOME: ${{ github.workspace }}/ci-home
     defaults:
       run:
         shell: pwsh

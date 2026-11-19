@@ -17,6 +17,7 @@ test('Windows delivery builds the patched client before publishing an artifact',
   const job = workflow.jobs['windows-client'];
   assert.equal(job['runs-on'], 'windows-2025');
   assert.equal(job['timeout-minutes'], 45);
+  assert.doesNotMatch(job.env.HERMES_HOME, /\$\{\{\s*runner\./, 'job.env cannot use the runner context before runner assignment');
   assert.equal(job.env.HERMES_DESKTOP_VARIANT, 'light');
   assert.equal(job.env.HERMES_BUILD_COMMIT, '3b421578588243f920886e6fe79a6faa87ea026e');
   const ids = job.steps.filter(step => step.id).map(step => step.id);
