@@ -251,7 +251,18 @@ public static class VoiceBundledWindow {
         Assert ((Hash $exe) -ceq $exeHash -and (Hash $entrypoint) -ceq $launcherHash) 'FIXTURE_PRODUCT_BYTES_CHANGED'
         $result.staleDiskCopyShadowed = $true
         $result.launchesVerified = $attempt
-        Stop-Fixture
+        # Repeated normal launches require graceful Chromium storage shutdown, not taskkill.
+        $closeRequested = $false
+        foreach ($identity in @(Fixture-Processes)) {
+            $candidate = Get-Process -Id $identity.ProcessId -ErrorAction SilentlyContinue
+            if ($candidate -and $candidate.Path -ieq $identity.ExecutablePath -and [Math]::Abs(($candidate.StartTime.ToUniversalTime() - $identity.CreationDate.ToUniversalTime()).TotalMilliseconds) -lt 1 -and $candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                if ($candidate.CloseMainWindow()) { $closeRequested = $true }
+            }
+        }
+        Assert $closeRequested 'GRACEFUL_NATIVE_CLOSE_NOT_REQUESTED'
+        $closeUntil = $clock.Elapsed.TotalSeconds + 8
+        while (@(Fixture-Processes).Count -gt 0 -and $clock.Elapsed.TotalSeconds -lt $closeUntil) { Start-Sleep -Milliseconds 200 }
+        Assert (@(Fixture-Processes).Count -eq 0) 'GRACEFUL_NATIVE_CLOSE_FAILED'
     }
     $result.repeatLaunchVerified = $true
     $result.passed = $true
