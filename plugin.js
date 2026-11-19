@@ -168,23 +168,14 @@ export class VoiceNote {
     if (!this.blob) throw new Error('В записи пока нет звука');
     this.update({ phase: 'sending', error: '' });
     let release;
-    let message = 'Владелец исходного чата не определён. Desktop не сообщил безопасный маршрут отправки.';
+    let message = 'Не удалось подключить исходный чат. Повтори отправку после восстановления связи.';
     try {
-      if (!target.owner) throw new Error('Не удалось определить владельца чата');
-      message = 'Не удалось получить список серверов. Проверь подключение и повтори отправку.';
-      const routes = (await this.host.profileRoutes()).filter(route =>
-        route.connectionId === target.owner.connectionId && route.profile === target.owner.profile);
-      if (generation !== this.generation) return;
-      message = routes.length === 0
-        ? 'Сервер исходного чата недоступен. Восстанови подключение и повтори отправку.'
-        : 'Desktop неоднозначно определил сервер исходного чата. Открой этот чат заново.';
-      if (routes.length !== 1) throw new Error('Не удалось определить сервер этого чата');
-      target.route = routes[0];
-      message = 'Не удалось подключиться к серверу. Повтори отправку после восстановления связи.';
-      release = await this.host.retainProfile(target.route, { spawnPriority: 'foreground' });
+      const session = await this.host.retainSession(target.stored, target.owner);
+      release = () => session.release();
+      const request = (...args) => session.request(...args);
       if (generation !== this.generation) return;
       message = 'Не удалось открыть исходный чат на сервере. Повтори отправку.';
-      const resumed = await this.host.requestProfile(target.route, 'session.resume', {
+      const resumed = await request('session.resume', {
         session_id: target.stored, omit_messages: true,
       });
       if (generation !== this.generation) return;
@@ -198,7 +189,7 @@ export class VoiceNote {
       });
       if (generation !== this.generation) return;
       message = 'Не удалось загрузить аудио на сервер. Повтори отправку.';
-      const uploaded = await this.host.requestProfile(target.route, 'file.attach', {
+      const uploaded = await request('file.attach', {
         session_id: resumed.session_id, name: `voice-${Date.now()}.wav`, data_url: dataUrl,
       }, 120000);
       if (generation !== this.generation) return;
@@ -206,8 +197,8 @@ export class VoiceNote {
       if (uploaded.attached !== true || typeof uploaded.ref_text !== 'string' || !uploaded.ref_text.startsWith('@file:')) {
         throw new Error('Сервер не принял аудио');
       }
-      message = 'Вернись в исходный чат и повтори отправку.';
-      if (!this.host.composer.submit(target.stored, uploaded.ref_text)) throw new Error('Вернись в исходный чат и повтори отправку');
+      message = 'Исходный чат сейчас не принимает сообщения. Открой его и дождись, когда ввод станет доступен.';
+      if (!this.host.composer.submit(target.stored, uploaded.ref_text)) throw new Error(message);
       this.blob = null;
       this.update({ phase: 'idle' });
       this.host.notify({ kind: 'success', message: 'Аудио передано в очередь чата' });
@@ -234,7 +225,7 @@ function VoiceControls({ voice }) {
   const status = state.phase === 'recording' ? elapsed
     : state.phase === 'starting' ? 'Микрофон…'
     : state.phase === 'sending' ? 'Отправка…'
-    : state.phase === 'ready' ? 'Готово' : '';
+    : state.phase === 'ready' ? 'К отправке' : '';
   const idle = state.phase === 'idle';
   return jsxs('div', { className: 'hermes-voice-note', 'data-phase': state.phase, children: [
     jsx('style', { children: `
@@ -288,8 +279,8 @@ export default {
   name: 'Голосовые сообщения',
   description: 'Записать WAV и отправить в этот чат без предварительного распознавания.',
   register(ctx) {
-    if (!host.state?.focusedSessionOwner?.get || !host.profileRoutes || !host.requestProfile || !host.retainProfile || !host.composer?.submit) {
-      host.notify({ kind: 'error', message: 'Голосовые сообщения: нужен Hermes Desktop с поддержкой адресной маршрутизации плагинов.' });
+    if (!host.state?.focusedSessionOwner?.get || typeof host.retainSession !== 'function' || !host.composer?.submit) {
+      host.notify({ kind: 'error', message: 'Голосовые сообщения: обнови Hermes Desktop с SDK из комплекта плагина. Одна переустановка плагина не обновляет клиент.' });
       return;
     }
     const voice = new VoiceNote(host);

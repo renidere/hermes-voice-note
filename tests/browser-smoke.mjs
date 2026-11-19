@@ -36,6 +36,7 @@ const route = {connectionId:'fixture-backend',mode:'remote',profile:'default',ta
 const state = {focusedSessionId:{get:()=> null},focusedStoredSessionId:{get:()=> 'fixture-stored'},focusedSessionOwner:{get:()=>({connectionId:'fixture-backend',profile:'default'})}};
 const sends = [];
 const host = {state,profileRoutes:async()=>[route],retainProfile:async()=>()=>{},notify:()=>{},
+ retainSession:async()=>({request:(...args)=>host.requestProfile(route,...args),release(){}}),
  requestProfile: async (route, method, params) => {const r=await fetch('/rpc',{method:'POST',body:JSON.stringify({route,method,params})});if(!r.ok)throw new Error(await r.text());return r.json();},
  composer:{submit:(id,text)=>{sends.push({id,text});return true;}}};
 const voice = new VoiceNote(host);

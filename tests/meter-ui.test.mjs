@@ -22,6 +22,7 @@ test('tiny meter follows captured PCM without rerendering the toolbar and disapp
   }
   const route={connectionId:'fixture',profile:'default'};
   const host={state:{focusedSessionId:{get:()=> 'live'},focusedStoredSessionId:{get:()=> 'stored'},focusedSessionOwner:{get:()=>route}},profileRoutes:async()=>[route],notify(){},retainProfile(){},requestProfile(){throw new Error('No backend allowed');},composer:{submit(){throw new Error('No submit allowed');}}};
+  host.retainSession = () => { throw new Error('No backend allowed'); };
   const plugin=await loadPlugin({ Date:Clock,AudioContext,navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}]})}} },{
     host,useValue:store=>{
       if(store===voice?.state) toolbarReads++;

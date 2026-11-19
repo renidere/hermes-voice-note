@@ -15,6 +15,7 @@ const host = {
   state: { focusedSessionId: { get: () => 'live' }, focusedStoredSessionId: { get: () => 'stored' },
     focusedSessionOwner: { get: () => ({ connectionId: 'fixture', profile: 'default' }) } },
   profileRoutes: async () => [route], retainProfile: async () => () => {}, notify() {},
+  retainSession: async () => ({ request: (...args) => host.requestProfile(route, ...args), release() {} }),
   requestProfile: async (_route, method) => method === 'session.resume'
     ? { session_id: 'live' } : { attached: true, ref_text: '@file:attachments/voice.wav' },
   composer: { submit: (_id, text) => { assert.equal(text, '@file:attachments/voice.wav'); explicitVoiceSubmits++; return true; } },

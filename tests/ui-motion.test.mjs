@@ -22,6 +22,7 @@ test('red indicator follows actual capture, not permission, stopped audio or upl
     state: { focusedSessionId: { get: () => 'live' }, focusedStoredSessionId: { get: () => 'stored' },
       focusedSessionOwner: { get: () => route } },
     profileRoutes: async () => [route], retainProfile: () => new Promise(() => {}),
+    retainSession: () => new Promise(() => {}),
     requestProfile() { throw new Error('No backend allowed'); }, composer: { submit() { throw new Error('No submit allowed'); } }, notify() {},
   };
   const stream = { getTracks: () => [{ stop() { stopped++; } }], getAudioTracks: () => [{ getSettings: () => ({}) }] };

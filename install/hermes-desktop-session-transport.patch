@@ -1,0 +1,635 @@
+diff --git a/apps/desktop/src/app/chat/composer/focus.ts b/apps/desktop/src/app/chat/composer/focus.ts
+index b1de3c085b..41da330136 100644
+--- a/apps/desktop/src/app/chat/composer/focus.ts
++++ b/apps/desktop/src/app/chat/composer/focus.ts
+@@ -82,6 +82,8 @@ const cssEscape = (value: string): string => {
+ }
+ 
+ interface SubmitDetail {
++  /** Set synchronously only by the subscriber that accepts this request. */
++  accepted: boolean
+   /** Unique mounted composer surface captured at click time. */
+   surfaceId: string
+   target: ComposerTarget
+@@ -599,7 +601,8 @@ export const onComposerDraftRequests = (
+ 
+ /** Submit a prompt through a composer as if the user typed + sent it. Lets
+  * external panels (e.g. the review pane's "let the agent ship it" button) hand
+- * the agent a task without the user round-tripping through the input. */
++ * the agent a task without the user round-tripping through the input.
++ * True means the mounted composer accepted dispatch/steer/queue, not backend delivery. */
+ export const requestComposerSubmit = (
+   text: string,
+   {
+@@ -624,14 +627,17 @@ export const requestComposerSubmit = (
+     return false
+   }
+ 
+-  dispatchNow<SubmitDetail>(SUBMIT_EVENT, {
++  const detail: SubmitDetail = {
++    accepted: false,
+     surfaceId,
+     target: resolvedTarget,
+     text: trimmed,
+     ...(displayKind ? { displayKind } : {})
+-  })
++  }
+ 
+-  return true
++  dispatchNow(SUBMIT_EVENT, detail)
++
++  return detail.accepted
+ }
+ 
+ // A popped-out Browser is a separate renderer, so its Comment Mode cannot use
+@@ -661,8 +667,12 @@ subscribePreviewAnnotateHandoff(async request => {
+   return { ok: true }
+ })
+ 
+-export const onComposerSubmitRequest = (handler: (detail: SubmitDetail) => void) =>
+-  subscribe<SubmitDetail>(SUBMIT_EVENT, handler)
++export const onComposerSubmitRequest = (handler: (detail: SubmitDetail) => boolean) =>
++  subscribe<SubmitDetail>(SUBMIT_EVENT, detail => {
++    if (!detail.accepted) {
++      detail.accepted = handler(detail) === true
++    }
++  })
+ 
+ /** Toggle ONE composer's voice conversation — the `composer.voice` hotkey
+  *  reaches the composer that owns voice. Defaults to the active
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+index 38039e5935..1a8999c4b4 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.test.tsx
+@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+ 
+ import * as sessionOwnerUtils from '@/app/session/hooks/use-session-actions/utils'
+ import { PaneVisibleContext } from '@/components/pane-shell/pane-visibility'
++import { composerHost } from '@/sdk/composer'
+ import { $clarifyRequests } from '@/store/clarify'
+ import {
+   clearComposerTerminalSelections,
+@@ -24,7 +25,7 @@ import {
+   setSudoRequest
+ } from '@/store/prompts'
+ import { hasOpenServerRequest, rememberServerRequest, resetServerRequestsForTests } from '@/store/server-requests'
+-import { $connection } from '@/store/session'
++import { $connection, $selectedStoredSessionId } from '@/store/session'
+ import { $setupBeatRequests, parkSetupBeat } from '@/store/setup-beat'
+ 
+ import { type ComposerTarget, requestComposerSubmit } from '../focus'
+@@ -75,6 +76,7 @@ function renderSubmitHook({
+   const onSubmit = vi.fn(async () => true)
+   const queueCurrentDraft = vi.fn(() => true)
+   let updatePaneVisible: Dispatch<SetStateAction<boolean>> | undefined
++  let updateInputDisabled: Dispatch<SetStateAction<boolean>> | undefined
+ 
+   const clearDraft = vi.fn(() => {
+     draftRef.current = ''
+@@ -109,8 +111,11 @@ function renderSubmitHook({
+   }
+ 
+   const hook = renderHook(
+-    () =>
+-      useComposerSubmit({
++    () => {
++      const [currentInputDisabled, setInputDisabled] = useState(inputDisabled)
++      updateInputDisabled = setInputDisabled
++
++      return useComposerSubmit({
+         activeQueueSessionKey: sessionKey,
+         activeQueueSessionKeyRef: { current: sessionKey },
+         attachments,
+@@ -124,7 +129,7 @@ function renderSubmitHook({
+         editorRef,
+         exitQueuedEdit: vi.fn(() => false),
+         focusInput,
+-        inputDisabled,
++        inputDisabled: currentInputDisabled,
+         loadIntoComposer,
+         onCancel,
+         onSteer,
+@@ -136,7 +141,8 @@ function renderSubmitHook({
+         sessionId: 'runtime-session',
+         setComposerText: vi.fn(),
+         stashAt
+-      }),
++      })
++    },
+     { wrapper: Wrapper }
+   )
+ 
+@@ -153,6 +159,14 @@ function renderSubmitHook({
+     onSubmit,
+     queueCurrentDraft,
+     composerSurfaceId: resolvedSurfaceId,
++    draftRef,
++    setInputDisabled(nextDisabled: boolean) {
++      if (!updateInputDisabled) {
++        throw new Error('Input disabled setter was not initialized')
++      }
++
++      updateInputDisabled(nextDisabled)
++    },
+     setPaneVisible(nextVisible: boolean) {
+       if (!updatePaneVisible) {
+         throw new Error('Pane visibility setter was not initialized')
+@@ -164,6 +178,93 @@ function renderSubmitHook({
+ }
+ 
+ describe('useComposerSubmit external request routing', () => {
++  it.each([
++    ['main', false],
++    ['main', true],
++    ['tile:acceptance', false],
++    ['tile:acceptance', true]
++  ] as const)('acknowledges only mounted acceptance with disable/recovery on %s (busy=%s)', async (target, busy) => {
++    const draftFile = { id: 'user-file', kind: 'file', label: 'keep.md' } as ComposerAttachment
++    const attachments = [draftFile]
++    const h = renderSubmitHook({ scopeTarget: target, busy, text: 'keep my draft', attachments })
++    const send = (text: string) => requestComposerSubmit(text, { target, surfaceId: h.composerSurfaceId })
++
++    await act(async () => {
++      expect(send('healthy')).toBe(true)
++    })
++    const receiver = busy ? h.onSteer : h.onSubmit
++    expect(receiver).toHaveBeenCalledTimes(1)
++    act(() => h.setInputDisabled(true))
++    expect(send('blocked WAV reference')).toBe(false)
++    expect(receiver).toHaveBeenCalledTimes(1)
++    expect(getQueuedPrompts('stored-session')).toEqual([])
++    act(() => h.setInputDisabled(false))
++    await act(async () => {
++      expect(send('recovered')).toBe(true)
++    })
++    expect(receiver).toHaveBeenCalledTimes(2)
++    expect(h.draftRef.current).toBe('keep my draft')
++    expect(h.editor.textContent).toBe('keep my draft')
++    expect(attachments).toEqual([draftFile])
++    expect(h.clearDraft).not.toHaveBeenCalled()
++    expect(h.loadIntoComposer).not.toHaveBeenCalled()
++    expect(h.stashAt).not.toHaveBeenCalled()
++  })
++
++  it('rejects a visible surface with no mounted submit subscriber', () => {
++    const surface = window.document.createElement('div')
++    surface.dataset.composerTarget = 'main'
++    surface.dataset.composerSurfaceId = 'orphan-surface'
++    window.document.body.append(surface)
++
++    try {
++      expect(requestComposerSubmit('retain WAV', { target: 'main', surfaceId: 'orphan-surface' })).toBe(false)
++    } finally {
++      surface.remove()
++    }
++  })
++
++  it('propagates mounted rejection through SDK stored-session routing without falling into another composer', async () => {
++    const previous = $selectedStoredSessionId.get()
++    const main = renderSubmitHook({ sessionKey: 'accept-main' })
++    const tile = renderSubmitHook({ scopeTarget: 'tile:accept-tile', sessionKey: 'accept-tile' })
++    $selectedStoredSessionId.set('accept-main')
++
++    try {
++      await act(async () => {
++        expect(composerHost.submit('accept-main', 'healthy main')).toBe(true)
++      })
++      act(() => main.setInputDisabled(true))
++      expect(composerHost.submit('accept-main', 'retain WAV')).toBe(false)
++      expect(tile.onSubmit).not.toHaveBeenCalled()
++      await act(async () => {
++        expect(composerHost.submit('accept-tile', 'healthy tile')).toBe(true)
++      })
++      expect(tile.onSubmit).toHaveBeenCalledOnce()
++      act(() => main.setInputDisabled(false))
++      await act(async () => {
++        expect(composerHost.submit('accept-main', 'recovered main')).toBe(true)
++      })
++      expect(main.onSubmit).toHaveBeenCalledTimes(2)
++    } finally {
++      $selectedStoredSessionId.set(previous)
++    }
++  })
++
++  it('rejects hidden and mismatched targets while recovering the exact captured surface', async () => {
++    const h = renderSubmitHook()
++    const surfaceId = h.composerSurfaceId
++    expect(requestComposerSubmit('wrong target', { target: 'tile:other', surfaceId })).toBe(false)
++    act(() => h.setPaneVisible(false))
++    expect(requestComposerSubmit('hidden', { target: 'main', surfaceId })).toBe(false)
++    expect(h.onSubmit).not.toHaveBeenCalled()
++    act(() => h.setPaneVisible(true))
++    await act(async () => {
++      expect(requestComposerSubmit('recovered', { target: 'main', surfaceId })).toBe(true)
++    })
++    expect(h.onSubmit).toHaveBeenCalledOnce()
++  })
++
+   afterEach(() => {
+     cleanup()
+     clearQueuedPrompts('stored-session')
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
+index c6551bc80c..491534d670 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-submit.ts
+@@ -264,7 +264,7 @@ export function useComposerSubmit({
+               displayKind ? () => {} : (scope, id) => enqueue(scope ?? queueKey, id)
+             )
+ 
+-            return
++            return true
+           }
+ 
+           // A hidden note never becomes a user turn: it rides session.steer into
+@@ -282,7 +282,7 @@ export function useComposerSubmit({
+               enqueue()
+             }
+ 
+-            return
++            return true
+           }
+ 
+           if (
+@@ -301,7 +301,11 @@ export function useComposerSubmit({
+           } else {
+             enqueue()
+           }
++
++          return true
+         }
++
++        return false
+       }),
+     [activeQueueSessionKeyRef, inputDisabled, paneVisible, scope.target, sessionId, surfaceId]
+   )
+diff --git a/apps/desktop/src/sdk/index.ts b/apps/desktop/src/sdk/index.ts
+index d34510854e..04590331c2 100644
+--- a/apps/desktop/src/sdk/index.ts
++++ b/apps/desktop/src/sdk/index.ts
+@@ -119,6 +119,7 @@ import {
+   pluginRouteStillRegistered,
+   requestPluginProfile
+ } from './profile-request'
++import { retainPluginSession } from './session-request'
+ import { sessionsHost } from './sessions'
+ import { desktopSettings } from './settings'
+ import { spellcheckHost } from './spellcheck'
+@@ -1404,6 +1405,9 @@ export const host = {
+     return retainGatewayForRelay(route.connectionId, route.profile)
+   },
+ 
++  /** Resolve and hold the captured durable session's native RPC route until release. */
++  retainSession: retainPluginSession,
++
+   /** Hold a route's pooled socket open across a multi-RPC, session-scoped
+    *  sequence (#93602). Each requestProfile call is its own request lease, so
+    *  a non-retained secondary socket closes at refcount 0 between calls — and
+diff --git a/apps/desktop/src/sdk/session-request.test.ts b/apps/desktop/src/sdk/session-request.test.ts
+new file mode 100644
+index 0000000000..4be5a26168
+--- /dev/null
++++ b/apps/desktop/src/sdk/session-request.test.ts
+@@ -0,0 +1,216 @@
++import { beforeEach, expect, it, vi } from 'vitest'
++
++const seams = vi.hoisted(() => ({
++  resolve: vi.fn(),
++  retain: vi.fn(),
++  release: vi.fn(),
++  exact: vi.fn(),
++  profile: vi.fn(),
++  ambient: vi.fn(),
++  gateway: null as null | { request: ReturnType<typeof vi.fn> },
++  registry: true,
++  profiles: ['default', 'worker']
++}))
++
++vi.mock('@/app/session/hooks/use-session-actions/utils', () => ({ resolveSessionOwner: seams.resolve }))
++vi.mock('@/store/gateway', () => ({
++  $gateway: { get: () => seams.gateway },
++  retainGatewayForAgent: seams.retain,
++  requestGatewayForAgent: seams.exact,
++  requestGatewayForProfile: seams.profile,
++  retainGatewayForSessionTurn: vi.fn()
++}))
++vi.mock('@/store/connection-registry-state', () => ({ hasRegistryTopology: () => seams.registry }))
++vi.mock('@/store/profile', () => ({ $profiles: { get: () => seams.profiles } }))
++vi.mock('@/store/session-gone-latch', () => ({ resetBackgroundPollingGuardAfterRebind: vi.fn() }))
++
++beforeEach(() => {
++  vi.resetAllMocks()
++  seams.registry = true
++  seams.profiles = ['default', 'worker']
++  seams.gateway = { request: seams.ambient }
++  seams.ambient.mockResolvedValue({ ok: true })
++  seams.profile.mockResolvedValue({ ok: true })
++  seams.resolve.mockResolvedValue({ connectionId: 'original-server', profile: 'worker' })
++  seams.retain.mockResolvedValue(seams.release)
++  seams.exact.mockImplementation(async (_connection, _profile, method) =>
++    method === 'session.resume' ? { session_id: 'runtime-original' } : { ref_text: '@file:voice.wav' }
++  )
++})
++
++it('resolves the original durable id once and holds its native route across resume and attach', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  const lease = await retainSession('stored-original', null)
++  // Focus and the resolver answer can move after acquisition; the lease must not.
++  seams.resolve.mockResolvedValue({ connectionId: 'focused-elsewhere', profile: 'default' })
++  const resumed = await lease.request<{ session_id: string }>('session.resume', { session_id: 'stored-original' })
++  await expect(
++    lease.request('file.attach', { session_id: resumed.session_id, data_url: 'data:audio/wav;base64,AA==' }, 1234)
++  ).resolves.toEqual({ ref_text: '@file:voice.wav' })
++  expect(seams.resolve).toHaveBeenCalledExactlyOnceWith('stored-original')
++  expect(seams.retain).toHaveBeenCalledExactlyOnceWith('original-server', 'worker', { spawnPriority: 'foreground' })
++  expect(seams.exact.mock.calls).toEqual([
++    ['original-server', 'worker', 'session.resume', { session_id: 'stored-original' }],
++    [
++      'original-server',
++      'worker',
++      'file.attach',
++      { session_id: 'runtime-original', data_url: 'data:audio/wav;base64,AA==' },
++      1234,
++      undefined
++    ]
++  ])
++  lease.release()
++  lease.release()
++  expect(seams.release).toHaveBeenCalledTimes(1)
++  await expect(lease.request('file.attach')).rejects.toThrow('released')
++  expect(seams.exact).toHaveBeenCalledTimes(2)
++})
++
++it.each(['', '   ', null, 4])('rejects an invalid durable id %j before resolving or dialing', async id => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  await expect(retainSession(id as string)).rejects.toThrow('stored session id')
++  expect(seams.resolve).not.toHaveBeenCalled()
++  expect(seams.retain).not.toHaveBeenCalled()
++})
++
++it.each([
++  {},
++  { connectionId: '', profile: 'worker' },
++  { connectionId: 'server', profile: '' },
++  { connectionId: 4, profile: 'worker' },
++  { connectionId: ' server', profile: 'worker' },
++  { connectionId: 'server', profile: 'worker ' }
++])('rejects malformed captured owner %j without resolving or dialing', async owner => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  await expect(retainSession('stored-original', owner as never)).rejects.toThrow('Session owner')
++  expect(seams.resolve).not.toHaveBeenCalled()
++  expect(seams.retain).not.toHaveBeenCalled()
++})
++
++it('copies the captured exact owner before the first await and does not re-resolve', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  const owner = { connectionId: 'captured', profile: 'worker' }
++  const pending = retainSession(' stored-original ', owner)
++  owner.connectionId = 'changed'
++  owner.profile = 'changed'
++  const lease = await pending
++  await lease.request('session.resume', { session_id: ' stored-original ' })
++  expect(seams.resolve).not.toHaveBeenCalled()
++  expect(seams.retain).toHaveBeenCalledWith('captured', 'worker', { spawnPriority: 'foreground' })
++  expect(seams.exact).toHaveBeenCalledWith('captured', 'worker', 'session.resume', { session_id: ' stored-original ' })
++  lease.release()
++})
++
++it('uses authoritative native bare-profile ownership without elevating to an active connection', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  seams.resolve.mockResolvedValue('native-profile')
++  const lease = await retainSession('stored-original')
++  await lease.request('session.resume', { session_id: 'stored-original' })
++  await lease.request('file.attach', { session_id: 'runtime-original' })
++  expect(seams.retain).toHaveBeenCalledWith(null, 'native-profile', { spawnPriority: 'foreground' })
++  expect(seams.profile).toHaveBeenCalledTimes(2)
++  expect(seams.exact).not.toHaveBeenCalled()
++  expect(seams.ambient).not.toHaveBeenCalled()
++  lease.release()
++})
++
++it.each([true, false])('refuses unresolved ownership in ambiguous topology (registry=%j)', async registry => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  seams.registry = registry
++  seams.resolve.mockResolvedValue(undefined)
++  await expect(retainSession('stored-original')).rejects.toMatchObject({
++    name: 'SessionOwnerResolutionError',
++    sessionId: 'stored-original',
++    method: 'session.resume'
++  })
++  expect(seams.retain).not.toHaveBeenCalled()
++  expect(seams.exact).not.toHaveBeenCalled()
++  expect(seams.profile).not.toHaveBeenCalled()
++  expect(seams.ambient).not.toHaveBeenCalled()
++})
++
++it('captures the admitted legacy sole gateway instead of re-reading the moving ambient socket', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  seams.registry = false
++  seams.profiles = ['default']
++  seams.resolve.mockResolvedValue(undefined)
++  const original = seams.gateway
++  const lease = await retainSession('stored-original')
++  const other = vi.fn()
++  seams.gateway = { request: other }
++  await expect(lease.request('session.resume', { session_id: 'stored-original' }, 42)).resolves.toEqual({ ok: true })
++  expect(original?.request).toHaveBeenCalledWith('session.resume', { session_id: 'stored-original' }, 42)
++  expect(other).not.toHaveBeenCalled()
++  expect(seams.retain).not.toHaveBeenCalled()
++  lease.release()
++})
++
++it('refuses admitted legacy topology when there is no actual gateway to capture', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  seams.registry = false
++  seams.profiles = ['default']
++  seams.resolve.mockResolvedValue(undefined)
++  seams.gateway = null
++  await expect(retainSession('stored-original')).rejects.toThrow('gateway')
++  expect(seams.retain).not.toHaveBeenCalled()
++})
++
++it('preserves resolver, retain, and request errors without logging or substituting another route', async () => {
++  const { retainPluginSession: retainSession } = await import('./session-request')
++  const error = new Error('synthetic private failure')
++  seams.resolve.mockRejectedValueOnce(error)
++  await expect(retainSession('stored-original')).rejects.toBe(error)
++  expect(seams.retain).not.toHaveBeenCalled()
++  seams.retain.mockRejectedValueOnce(error)
++  await expect(retainSession('stored-original')).rejects.toBe(error)
++  expect(seams.release).not.toHaveBeenCalled()
++  const lease = await retainSession('stored-original')
++  seams.exact.mockRejectedValueOnce(error)
++
++  try {
++    await expect(lease.request('file.attach')).rejects.toBe(error)
++  } finally {
++    lease.release()
++  }
++
++  expect(seams.release).toHaveBeenCalledTimes(1)
++  expect(seams.ambient).not.toHaveBeenCalled()
++  expect(seams.profile).not.toHaveBeenCalled()
++})
++
++it('wires host.retainSession directly to the tested native implementation (AST wiring check)', async () => {
++  const { readFileSync } = await import('node:fs')
++  const { dirname, join } = await import('node:path')
++  const { fileURLToPath } = await import('node:url')
++  const ts = await import('typescript')
++
++  const source = ts.createSourceFile(
++    'index.ts',
++    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8'),
++    ts.ScriptTarget.Latest,
++    true
++  )
++
++  const declaration = source.statements
++    .flatMap(statement => (ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : []))
++    .find(node => node.name.getText(source) === 'host')
++
++  const host = declaration?.initializer
++  expect(host && ts.isObjectLiteralExpression(host)).toBe(true)
++
++  if (!host || !ts.isObjectLiteralExpression(host)) {throw new Error('Missing host object')}
++  const property = host.properties.find(node => node.name?.getText(source) === 'retainSession')
++  expect(property, 'host.retainSession must be exported').toBeDefined()
++
++  if (!property || !ts.isPropertyAssignment(property)) {throw new Error('Missing direct session lease export')}
++  expect(property.initializer.getText(source)).toBe('retainPluginSession')
++  expect(
++    source.statements.some(
++      node =>
++        ts.isImportDeclaration(node) &&
++        node.moduleSpecifier.getText(source) === "'./session-request'" &&
++        node.importClause?.namedBindings?.getText(source).includes('retainPluginSession')
++    )
++  ).toBe(true)
++})
+diff --git a/apps/desktop/src/sdk/session-request.ts b/apps/desktop/src/sdk/session-request.ts
+new file mode 100644
+index 0000000000..cbd3d4bb09
+--- /dev/null
++++ b/apps/desktop/src/sdk/session-request.ts
+@@ -0,0 +1,70 @@
++import { resolveSessionOwner } from '@/app/session/hooks/use-session-actions/utils'
++import { $gateway, retainGatewayForAgent } from '@/store/gateway'
++import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
++import { isSessionOwnerRoute, requestForSessionProfile, type SessionOwnerRoute } from '@/store/session-request-router'
++
++export async function retainPluginSession(
++  storedSessionId: string,
++  capturedOwner?: Pick<SessionOwnerRoute, 'connectionId' | 'profile'> | null
++) {
++  if (typeof storedSessionId !== 'string' || !storedSessionId.trim()) {
++    throw new Error('A nonempty stored session id is required')
++  }
++
++  if (
++    capturedOwner != null &&
++    (typeof capturedOwner !== 'object' ||
++      ![capturedOwner.connectionId, capturedOwner.profile].every(
++        value => typeof value === 'string' && value.length > 0 && value === value.trim()
++      ))
++  ) {
++    throw new Error('Session owner must include nonempty connectionId and profile without surrounding whitespace')
++  }
++
++  const resolved = capturedOwner
++    ? { connectionId: capturedOwner.connectionId, profile: capturedOwner.profile }
++    : await resolveSessionOwner(storedSessionId)
++
++  const owner = isSessionOwnerRoute(resolved) ? { ...resolved } : resolved
++  assertSessionOwnerResolved(owner, { method: 'session.resume', sessionId: storedSessionId })
++  const profile = isSessionOwnerRoute(owner) ? owner.profile : owner
++  // Only the native sole-topology gate above can admit an unknown owner.
++  const gateway = profile ? null : $gateway.get()
++
++  if (!profile && !gateway) {
++    throw new Error('No session gateway is connected')
++  }
++
++  const release = profile
++    ? await retainGatewayForAgent(isSessionOwnerRoute(owner) ? owner.connectionId : null, profile, {
++        spawnPriority: 'foreground'
++      })
++    : () => undefined
++
++  let released = false
++
++  return {
++    request<T>(method: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
++      if (released) {
++        return Promise.reject(new Error('Session request lease has been released'))
++      }
++
++      return requestForSessionProfile<T>(
++        owner,
++        <R>(requestMethod: string, requestParams?: Record<string, unknown>, requestTimeout?: number) =>
++          gateway
++            ? gateway.request<R>(requestMethod, requestParams, requestTimeout)
++            : Promise.reject(new Error('No session gateway is connected')),
++        method,
++        params,
++        timeoutMs
++      )
++    },
++    release(): void {
++      if (!released) {
++        released = true
++        release()
++      }
++    }
++  }
++}
+diff --git a/apps/desktop/vitest.session-request.config.ts b/apps/desktop/vitest.session-request.config.ts
+new file mode 100644
+index 0000000000..d0b9a160f5
+--- /dev/null
++++ b/apps/desktop/vitest.session-request.config.ts
+@@ -0,0 +1,8 @@
++import { fileURLToPath } from 'node:url'
++
++import { defineConfig } from 'vitest/config'
++
++export default defineConfig({
++  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
++  test: { environment: 'node', include: ['src/sdk/session-request.test.ts'] }
++})
+diff --git a/website/docs/developer-guide/desktop-plugin-sdk.md b/website/docs/developer-guide/desktop-plugin-sdk.md
+index 0ab244c5c5..b0cbcb3a3a 100644
+--- a/website/docs/developer-guide/desktop-plugin-sdk.md
++++ b/website/docs/developer-guide/desktop-plugin-sdk.md
+@@ -1447,6 +1447,7 @@ host.profileRoutes()                       // [{ profile, targetProfile, connect
+ host.requestProfile<T>(route, method, params?, timeoutMs?, { spawnPriority? })   // registry-routed RPC; no foreground swap
+ host.requestProfile<T>(profile, method, params?) // legacy v1/local overload
+ host.request<T>(method, params?)           // active-gateway JSON-RPC — the real power
++host.retainSession(storedSessionId, capturedOwner?) // native session-scoped request lease
+ host.sessions.pin(storedSessionId, pinned?, index?)  // pin/unpin (default pinned=true); index = slot in Pinned;
+                                            //   same store the row's ⇧-click / drop writes
+ host.sessions.reorder(ids)                 // replace the manual Recents order (what a drag persists); [] resets
+@@ -1469,6 +1470,24 @@ profile without changing the active chat or gateway. The profile-only overload i
+ retained only for the sole-local/legacy topology; registry-aware plugins should pass
+ the descriptor so two sources exposing the same profile name cannot collide.
+ 
++`host.retainSession(storedSessionId, capturedOwner?)` returns
++`Promise<{ request<T>(method, params?, timeoutMs?): Promise<T>; release(): void }>`.
++Pass the original nonempty durable id, not the current focus. An optional
++`{ connectionId, profile }` owner is copied before the first await; when omitted
++or null, core resolves that original id through its native owner resolver. Exact
++owner fields must be nonempty strings without surrounding whitespace; identifiers
++are never silently repaired. Native bare-profile ownership keeps the native
++profile transport, without guessing an active connection. Unresolved ownership
++fails closed except for the native proven sole-backend legacy topology, where the
++actual ambient gateway is captured once. Acquisition holds the native pooled
++socket at foreground priority without changing focus. Use the lease for the
++whole `session.resume` → `file.attach` sequence and call `release()` in `finally`.
++The lease does not resume automatically or rewrite RPC parameters: pass the
++captured durable id to resume and its returned runtime id to attach. Release is
++idempotent; later requests reject. Errors propagate to the caller; show a safe
++user-facing message rather than raw backend error text. Feature-detect
++`typeof host.retainSession === 'function'` on older desktops.
++
+ A call that has to open a connection to another profile dials at background priority
+ by default. After a failed dial to that profile, background calls fail fast while the
+ reconnect backoff runs (`Backend for "<profile>" is reconnecting; retry after it settles.`)

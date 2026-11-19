@@ -41,6 +41,14 @@ function fakeHost() {
       focusedSessionOwner: { get: () => focus.owner }, busyBySession: { get: () => ({}) },
     },
     profileRoutes: async () => [route], retainProfile: async () => () => calls.push(['release']),
+    retainSession: async (stored, capturedOwner) => {
+      assert.equal(stored, 'stored-a');
+      const owner = capturedOwner ?? route;
+      const routes = (await host.profileRoutes()).filter(r => r.connectionId === owner.connectionId && r.profile === owner.profile);
+      if (routes.length !== 1) throw new Error('Fixture native owner is unresolved');
+      const release = await host.retainProfile(routes[0], { spawnPriority: 'foreground' });
+      return { request: (...args) => host.requestProfile(routes[0], ...args), release };
+    },
     requestProfile: async (owner, method, params) => {
       calls.push([method, structuredClone(params), owner]);
       if (method === 'session.resume') return { session_id: 'resumed-a', stored_session_id: 'stored-a' };
@@ -119,6 +127,143 @@ test('an existing chat can record without a live runtime and sends to its captur
 });
 
 
+test('native session transport sends a recording with no owner snapshot to its original chat', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  focus.live = null; focus.owner = null;
+  const routed = host.requestProfile;
+  host.retainSession = async (stored, capturedOwner) => {
+    assert.equal(stored, 'stored-a');
+    assert.equal(capturedOwner, null);
+    calls.push(['retainSession', stored]);
+    return { request: (...args) => routed(route, ...args), release: () => calls.push(['release']) };
+  };
+  host.profileRoutes = host.retainProfile = host.requestProfile = async () => { throw new Error('Legacy routing must not run'); };
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture);
+    assert.equal(calls.length, 0, 'Native routing must wait for explicit Send');
+    focus.stored = 'stored-b'; focus.owner = { connectionId: 'other-backend', profile: 'other' };
+    await voice.send();
+    assert.deepEqual(calls.find(([name]) => name === 'retainSession'), ['retainSession', 'stored-a']);
+    assert.equal(calls.find(([name]) => name === 'session.resume')[1].session_id, 'stored-a');
+    assert.equal(calls.find(([name]) => name === 'file.attach')[2], route);
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+    assert.equal(calls.filter(([name]) => name === 'release').length, 1);
+    assert.equal(voice.state.get().phase, 'idle');
+    assert.equal(voice.blob, null);
+  } finally { voice.cancel(); }
+});
+
+
+test('native owner lookup failure keeps exact WAV bytes and retries the original session', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  focus.owner = null;
+  const routed = host.requestProfile;
+  let offline = false;
+  host.retainSession = async (stored, owner) => {
+    assert.equal(stored, 'stored-a'); assert.equal(owner, null);
+    if (offline) throw new Error('private-native-lookup-failure');
+    return { request: (...args) => routed(route, ...args), release: () => calls.push(['release']) };
+  };
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture); await voice.send();
+    assert.equal(calls.filter(([name]) => name === 'submit').length, 1, 'Healthy native delivery must work before the fault');
+    calls.length = 0; offline = true;
+    await voice.start(); feed(capture);
+    await assert.rejects(voice.send(), /private-native-lookup-failure/);
+    const wav = Buffer.from(await voice.blob.arrayBuffer());
+    assert.equal(voice.state.get().phase, 'ready');
+    assert.equal(calls.some(([name]) => name === 'file.attach' || name === 'submit'), false);
+    assert.doesNotMatch(voice.state.get().error, /private-/);
+    offline = false; focus.stored = 'stored-b';
+    await voice.send();
+    const upload = calls.find(([name]) => name === 'file.attach');
+    assert.deepEqual(Buffer.from(upload[1].data_url.split(',')[1], 'base64'), wav);
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+  } finally { voice.cancel(); }
+});
+
+
+test('a cancelled native lookup releases its late lease without touching a newer recording', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  focus.owner = null;
+  const routed = host.requestProfile;
+  let finish;
+  host.retainSession = () => new Promise(resolve => { finish = resolve; });
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture);
+    const sending = voice.send();
+    await new Promise(resolve => setImmediate(resolve));
+    voice.cancel(); focus.stored = 'stored-b';
+    await voice.start(); feed(capture);
+    finish({ request: (...args) => routed(route, ...args), release: () => calls.push(['release']) });
+    await sending;
+    assert.equal(voice.state.get().phase, 'recording');
+    assert.ok(voice.chunks.length);
+    assert.deepEqual(calls, [['release']]);
+  } finally { voice.cancel(); }
+});
+
+
+test('native transport keeps a known captured owner rather than resolving the new focus', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  const routed = host.requestProfile;
+  host.retainSession = async (stored, owner) => {
+    assert.equal(stored, 'stored-a');
+    assert.deepEqual(structuredClone(owner), { connectionId: 'fixture-backend', profile: 'default' });
+    return { request: (...args) => routed(route, ...args), release: () => calls.push(['release']) };
+  };
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture);
+    focus.owner.connectionId = 'other-backend'; focus.stored = 'stored-b';
+    await voice.send();
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+  } finally { voice.cancel(); }
+});
+
+
+test('native composer refusal keeps the WAV until the original composer accepts a retry', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  focus.owner = null;
+  const routed = host.requestProfile;
+  host.retainSession = async (stored, owner) => {
+    assert.equal(stored, 'stored-a'); assert.equal(owner, null);
+    return { request: (...args) => routed(route, ...args), release: () => calls.push(['release']) };
+  };
+  const submit = host.composer.submit;
+  let blocked = false;
+  host.composer.submit = (...args) => blocked ? false : submit(...args);
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture); await voice.send();
+    assert.equal(calls.filter(([name]) => name === 'submit').length, 1, 'Healthy composer must accept before injecting refusal');
+    calls.length = 0; blocked = true;
+    await voice.start(); feed(capture);
+    await assert.rejects(voice.send(), /исходный чат/i);
+    const wav = voice.blob;
+    assert.ok(wav.size > 44);
+    assert.equal(voice.state.get().phase, 'ready');
+    assert.match(voice.state.get().error, /ввод.*доступ/);
+    assert.equal(calls.some(([name]) => name === 'submit'), false);
+    assert.equal(calls.filter(([name]) => name === 'release').length, 1);
+    blocked = false;
+    await voice.send();
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+    const uploaded = calls.filter(([name]) => name === 'file.attach').at(-1);
+    assert.deepEqual(Buffer.from(uploaded[1].data_url.split(',')[1], 'base64'), Buffer.from(await wav.arrayBuffer()));
+    assert.equal(voice.blob, null);
+  } finally { voice.cancel(); }
+});
+
+
 test('microphone capture starts even when the chat owner is temporarily unavailable', async () => {
   const { host, focus, calls } = fakeHost();
   focus.owner = null;
@@ -164,10 +309,10 @@ test('route failure happens only on Send and retains the WAV for a successful re
 
 test('delivery reports the failing stage and preserves the recording without guessing a server', async () => {
   const cases = [
-    { setup(host, focus) { focus.owner = null; }, message: /владелец исходного чата не определён/i },
-    { setup(host) { host.profileRoutes = async () => { throw new Error('private-route-failure'); }; }, message: /получить список серверов/i },
-    { setup(host) { host.profileRoutes = async () => []; }, message: /сервер исходного чата недоступен/i },
-    { setup(host) { host.retainProfile = async () => { throw new Error('private-connect-failure'); }; }, message: /подключиться к серверу/i },
+    { setup(host, focus) { focus.owner = null; host.retainSession = async () => { throw new Error('private-owner-failure'); }; }, message: /подключить исходный чат/i },
+    { setup(host) { host.profileRoutes = async () => { throw new Error('private-route-failure'); }; }, message: /подключить исходный чат/i },
+    { setup(host) { host.profileRoutes = async () => []; }, message: /подключить исходный чат/i },
+    { setup(host) { host.retainProfile = async () => { throw new Error('private-connect-failure'); }; }, message: /подключить исходный чат/i },
     { setup(host) { host.requestProfile = async () => { throw new Error('private-resume-failure'); }; }, message: /открыть исходный чат/i },
   ];
   for (const scenario of cases) {
@@ -500,6 +645,35 @@ test('record errors notify outside the composer without leaking raw failures', a
     voice.cancel();
     assert.deepEqual(calls, [], 'Clearing an error must not notify again');
   } finally { cleanup.forEach(fn => fn()); }
+});
+
+
+test('a stopped recording is labelled for sending, not as a completed delivery', async () => {
+  const { host } = fakeHost();
+  const { env, capture } = fakeAudio();
+  const plugin = await loadPlugin(env, { host });
+  const contributions = [], cleanup = [];
+  plugin.default.register({ register: c => contributions.push(c), onDispose: fn => cleanup.push(fn) });
+  const element = contributions[0].render();
+  const voice = element.props.voice;
+  try {
+    await voice.start(); feed(capture); voice.stop();
+    const text = textContent(element.type(element.props));
+    assert.match(text, /К отправке/);
+    assert.doesNotMatch(text, /Готово/);
+    assert.ok(voice.blob.size > 44);
+  } finally { cleanup.forEach(fn => fn()); }
+});
+
+
+test('a legacy routing SDK without native acceptance support is refused before recording', async () => {
+  const { host, calls } = fakeHost();
+  delete host.retainSession;
+  const plugin = await loadPlugin({}, { host });
+  const contributions = [];
+  plugin.default.register({ register: c => contributions.push(c), onDispose() {} });
+  assert.equal(contributions.length, 0);
+  assert.ok(calls.find(([name, value]) => name === 'notify' && value.kind === 'error'));
 });
 
 

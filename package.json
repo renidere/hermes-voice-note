@@ -1,6 +1,6 @@
 {
   "name": "hermes-voice-note",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "private": true,
   "description": "Voice-note WAV attachments for Hermes Desktop",
@@ -14,7 +14,8 @@
     "test": "node --experimental-vm-modules --test tests/*.test.mjs",
     "test:dom": "node --experimental-vm-modules tests/dom-safety.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
-    "test:ui-browser": "node tests/ui-motion-browser.mjs"
+    "test:ui-browser": "node tests/ui-motion-browser.mjs",
+    "test:native": "node --experimental-vm-modules tests/native-delivery.mjs"
   },
   "devDependencies": {
     "@vscode/codicons": "0.0.45",

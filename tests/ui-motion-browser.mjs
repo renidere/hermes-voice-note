@@ -29,6 +29,7 @@ export const control = {phase:()=>{},sends:[],formSubmits:0,offline:true};
 export const host = {
  state:{focusedSessionId:{get:()=> 'live'},focusedStoredSessionId:{get:()=> 'stored'},focusedSessionOwner:{get:()=> route}},
  profileRoutes:async()=>[route],
+ retainSession:async()=>({request:(...args)=>host.requestProfile(route,...args),release:await host.retainProfile()}),
  retainProfile:()=>new Promise(resolve=>{control.finishRetain=()=>resolve(()=>{});}),
  requestProfile:async(_route,method)=>{if(method==='session.resume')return {session_id:'resumed'};if(control.offline)throw new Error('Fixture offline');return {attached:true,ref_text:'@file:attachments/ui.wav'};},
  composer:{submit:(id,text)=>{control.sends.push({id,text});return true;}},notify(){}
