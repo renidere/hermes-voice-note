@@ -8,7 +8,7 @@ async function fixture() {
   const host = { state: {
     focusedSessionId: { get: () => 'live' }, focusedStoredSessionId: { get: () => 'stored' },
     focusedSessionOwner: { get: () => route },
-  }, profileRoutes: async () => [route] };
+  }, profileRoutes: async () => [route], notify() {} };
   const stream = { getTracks: () => [{ stop() {} }] };
   const env = {
     Date: { now: () => now },

@@ -47,7 +47,10 @@ export class VoiceNote {
     this.generation = 0;
   }
 
-  update(values) { this.state.set({ ...this.state.get(), ...values }); }
+  update(values) {
+    this.state.set({ ...this.state.get(), ...values });
+    if (values.error) this.host.notify({ kind: 'error', message: values.error });
+  }
 
   async start() {
     if (this.state.get().phase !== 'idle') return;
@@ -55,14 +58,13 @@ export class VoiceNote {
     this.levelAt = -Infinity;
     const generation = ++this.generation;
     const target = this.target = {
-      live: this.host.state.focusedSessionId.get(),
       stored: this.host.state.focusedStoredSessionId.get(),
       owner: this.host.state.focusedSessionOwner.get(),
     };
     this.update({ phase: 'starting', error: '' });
     try {
       // shortcut: existing chats only; extend when the SDK exposes first-message attachment staging.
-      if (!target.live || !target.stored) {
+      if (!target.stored) {
         this.update({ phase: 'idle', error: 'Открой существующий чат перед записью.' });
         return;
       }

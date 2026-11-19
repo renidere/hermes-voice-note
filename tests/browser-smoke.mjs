@@ -33,7 +33,7 @@ const page = `<!doctype html><meta charset="utf-8"><title>Voice note capture smo
 <script type="module">
 import {VoiceNote} from '/plugin.js';
 const route = {connectionId:'fixture-backend',mode:'remote',profile:'default',targetProfile:'default'};
-const state = {focusedSessionId:{get:()=> 'fixture-live'},focusedStoredSessionId:{get:()=> 'fixture-stored'},focusedSessionOwner:{get:()=>({connectionId:'fixture-backend',profile:'default'})}};
+const state = {focusedSessionId:{get:()=> null},focusedStoredSessionId:{get:()=> 'fixture-stored'},focusedSessionOwner:{get:()=>({connectionId:'fixture-backend',profile:'default'})}};
 const sends = [];
 const host = {state,profileRoutes:async()=>[route],retainProfile:async()=>()=>{},notify:()=>{},
  requestProfile: async (route, method, params) => {const r=await fetch('/rpc',{method:'POST',body:JSON.stringify({route,method,params})});if(!r.ok)throw new Error(await r.text());return r.json();},

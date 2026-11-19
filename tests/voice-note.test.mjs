@@ -96,6 +96,29 @@ test('records WAV and submits only its reference through the original session wi
   assert.deepEqual(calls.filter(([name]) => !['release', 'notify', 'submit'].includes(name)).map(([name]) => name), ['session.resume', 'file.attach']);
 });
 
+test('an existing chat can record without a live runtime and sends to its captured owner', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  focus.live = null;
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start();
+    assert.equal(voice.state.get().phase, 'recording');
+    assert.equal(calls.length, 0, 'Recording must not wake the backend');
+    feed(capture);
+    focus.live = 'live-b';
+    focus.stored = 'stored-b';
+    focus.owner = { connectionId: 'other-backend', profile: 'other' };
+    await voice.send();
+    const resume = calls.find(([name]) => name === 'session.resume');
+    assert.equal(resume[1].session_id, 'stored-a');
+    assert.equal(resume[2], route);
+    assert.equal(calls.find(([name]) => name === 'file.attach')[2], route);
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+  } finally { voice.cancel(); }
+});
+
+
 test('cancelling while microphone permission is pending closes the late stream without uploading', async () => {
   const { host, calls } = fakeHost();
   const { env, capture } = fakeAudio();
@@ -180,7 +203,7 @@ test('a second send click cannot start a second upload', async () => {
 
 
 test('failed audio startup releases the device and returns to idle', async () => {
-  const { host } = fakeHost();
+  const { host, calls } = fakeHost();
   const { env, capture } = fakeAudio();
   env.AudioContext.prototype.createMediaStreamSource = () => { throw new Error('device lost'); };
   const voice = new (await loadPlugin(env)).VoiceNote(host);
@@ -189,6 +212,7 @@ test('failed audio startup releases the device and returns to idle', async () =>
   assert.equal(capture.contextClosed, 1);
   assert.equal(voice.state.get().phase, 'idle');
   assert.match(voice.state.get().error, /микрофон/i);
+  assert.deepEqual(structuredClone(calls), [['notify', { kind: 'error', message: voice.state.get().error }]]);
 });
 
 
@@ -200,7 +224,7 @@ test('sending before the first audio frame stops capture instead of leaving a st
   await assert.rejects(voice.send());
   assert.equal(voice.state.get().phase, 'idle');
   assert.equal(capture.tracksStopped, 1);
-  assert.equal(calls.length, 0);
+  assert.deepEqual(structuredClone(calls), [['notify', { kind: 'error', message: voice.state.get().error }]]);
 });
 
 
@@ -218,7 +242,7 @@ test('the recording limit stops capture and retains audio without auto-sending',
   assert.equal(voice.state.get().phase, 'ready');
   assert.ok(voice.blob.size > 44);
   assert.equal(capture.tracksStopped, 1);
-  assert.equal(calls.length, 0);
+  assert.deepEqual(structuredClone(calls), [['notify', { kind: 'error', message: voice.state.get().error }]]);
 });
 
 
@@ -318,6 +342,49 @@ test('an empty new chat gets a clear existing-chat requirement without opening t
   assert.equal(capture.constraints, null);
   assert.equal(voice.state.get().phase, 'idle');
   assert.match(voice.state.get().error, /существующий чат/);
+});
+
+
+test('record errors notify outside the composer without leaking raw failures', async () => {
+  const { host, focus, calls } = fakeHost();
+  const { env, capture } = fakeAudio();
+  const plugin = await loadPlugin(env, { host });
+  const contributions = [], cleanup = [];
+  plugin.default.register({ register: value => contributions.push(value), onDispose: fn => cleanup.push(fn) });
+  const element = contributions[0].render();
+  const voice = element.props.voice;
+  const click = label => findButton(element.type(element.props), label).props.onClick();
+  const expectError = () => {
+    assert.deepEqual(structuredClone(calls.filter(([name]) => name === 'notify')), [['notify', { kind: 'error', message: voice.state.get().error }]]);
+    assert.ok(calls.every(([name]) => ['notify', 'release'].includes(name)));
+    assert.ok(voice.state.get().error);
+    assert.equal(voice.state.get().error.includes('private-raw-failure'), false);
+    calls.length = 0;
+  };
+  try {
+    focus.stored = null;
+    await click('Записать');
+    assert.equal(capture.constraints, null);
+    expectError();
+    focus.stored = 'stored-a';
+    const getUserMedia = env.navigator.mediaDevices.getUserMedia;
+    env.navigator.mediaDevices.getUserMedia = async () => {
+      const error = new Error('private-raw-failure'); error.name = 'NotAllowedError'; throw error;
+    };
+    await click('Записать');
+    assert.match(voice.state.get().error, /Нет доступа к микрофону/);
+    expectError();
+    env.navigator.mediaDevices.getUserMedia = getUserMedia;
+    await click('Записать'); feed(capture);
+    host.requestProfile = async () => { throw new Error('private-raw-failure'); };
+    await click('Отправить');
+    assert.equal(voice.state.get().phase, 'ready');
+    assert.ok(voice.blob.size > 44);
+    assert.equal(capture.tracksStopped, 1);
+    expectError();
+    voice.cancel();
+    assert.deepEqual(calls, [], 'Clearing an error must not notify again');
+  } finally { cleanup.forEach(fn => fn()); }
 });
 
 

@@ -1,6 +1,6 @@
 {
   "name": "hermes-voice-note",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "private": true,
   "description": "Voice-note WAV attachments for Hermes Desktop",
