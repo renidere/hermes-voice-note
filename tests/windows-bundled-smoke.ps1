@@ -188,7 +188,10 @@ export default {
     $null = New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Action Block -Program $exe -Profile Any -Enabled True
     $active = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $ruleName)
     Assert ($active.Count -eq 1 -and $active[0].Enabled -eq 'True' -and $active[0].Direction -eq 'Outbound' -and $active[0].Action -eq 'Block') 'ACTIVE_OUTBOUND_BLOCK_REQUIRED'
-    Assert ($active[0].Profile -eq 'Any' -and $active[0].PrimaryStatus -eq 'OK' -and @($active[0].EnforcementStatus).Count -eq 1 -and [int]$active[0].EnforcementStatus[0] -eq 1) 'FIREWALL_BLOCK_MUST_BE_FULLY_ENFORCED'
+    $enforcement = @($active[0].EnforcementStatus | ForEach-Object { [string]$_ })
+    $result['firewallEnforcement'] = $enforcement
+    # NetSecurity reports one status per applicable/inactive profile, as strings.
+    Assert ($active[0].Profile -eq 'Any' -and $active[0].PrimaryStatus -eq 'OK' -and $enforcement -contains 'Enforced' -and @($enforcement | Where-Object { $_ -notin @('Enforced','ProfileInactive') }).Count -eq 0) 'FIREWALL_BLOCK_MUST_BE_FULLY_ENFORCED'
     $apps = @($active[0] | Get-NetFirewallApplicationFilter)
     Assert ($apps.Count -eq 1 -and $apps[0].Program -ieq $exe) 'EXACT_EXE_FIREWALL_FILTER_REQUIRED'
     Add-Type -TypeDefinition @'
