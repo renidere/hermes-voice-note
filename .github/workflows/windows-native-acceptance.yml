@@ -21,11 +21,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download 44579671841 --repo renidere/hermes-voice-note --name windows-bundled-failure --dir candidate
+          gh run download 44585499590 --repo renidere/hermes-voice-note --name windows-voice-sdk-x64 --dir candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $zip = Join-Path $PWD 'candidate/Hermes-Voice-SDK-Windows-x64.zip'
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne '0b4b71276b0d166582043b0b6700a7a4560d530b425a7fc259db11728bf3db89') { throw 'CANDIDATE_HASH_MISMATCH' }
+          if ($hash -cne 'ed34889048b5128343f2bc34cf7aba821dd0b6a586031d471f0dc42c4941857f') { throw 'CANDIDATE_HASH_MISMATCH' }
           Expand-Archive -LiteralPath $zip -DestinationPath client
       - name: Actual packaged SDK and Record DOM
         shell: powershell
