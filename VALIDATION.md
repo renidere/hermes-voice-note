@@ -6,8 +6,19 @@
 
 - Workflow и `Start-Voice-Note.cmd` имеют сохранённые RED → unchanged FIRSTGREEN. Исторический этап отсутствующего автоматического PS installer на Windows также сохранён, но этот отдельный installer исключён из итогового решения в пользу штатного bundled-механизма.
 - Оригинальная сборка 0.4.1 дополнительно проверена через настоящий скомпилированный SDK/disk-loader/blob-shim и явный `plugin.register(ctx)`: один `record` contribution, ноль compatibility notifications/network attempts. Это изолированный VM/JSDOM контроль, не native Windows.
-- Новый Windows workflow требует совместной сборки SDK/плагина, проверки девяти input hashes и запуска реального packaged EXE с наблюдением SDK и DOM-кнопки. Публикация разрешена только после прохождения `smoke-bundled` и проверки `recordControlObserved` в его фактическом result.json. Точный run и binary hash поставляются в `windows-build.json`; наличие workflow само по себе не считается PASS.
+- Новый Windows workflow требует совместной сборки SDK/плагина, проверки девяти input hashes и запуска реального packaged EXE с наблюдением SDK и DOM-кнопки. Публикация разрешена только после прохождения `smoke-bundled` и проверки `recordControlObserved` в его фактическом result.json. Точный run и SHA-256 архива ZIP (`packageSha256`) поставляются в `windows-build.json`; наличие workflow само по себе не считается PASS.
 - Маленький CMD только задаёт отдельные process-scoped home/userData и запрещает регистрацию глобального `hermes://`. Он не использует PowerShell, Git, npm, копирование плагинов, удаление данных или provider API.
+
+## Выполненная Windows-проверка 0.4.2
+
+- Полный GitHub Actions run **44585499590**, source commit **b64557e49a99d3dd112aab0405d603f29be7b6df** — SUCCESS на Windows 2025. SDK: **76/76**, composer: **101/101**, Node suite: **38/38**, DOM suite: **3/3**. Отдельный focused bundled-shadow control: **1 PASS**, остальные 32 случая этой suite не выбраны фильтром. Эти наборы не суммируются как уникальные сценарии.
+- Штатные build/unsigned x64 ZIP, девять source hashes до/после build, native SDK и DOM-кнопка, два обычных запуска с сохранением plugin storage, запрет stale disk registration — PASS. Синтетические контрольные home/userData, protocol registry и постоянное окружение не изменены; OWN процессы завершены.
+- Финальный ZIP дополнительно скачан, проверен по SHA-256, распакован и запущен на отдельном Windows runner: native acceptance **44587412761**, workflow commit **534f7180d61eb6cc4a8bafd940497cee0a93d9aa** — SUCCESS. Публикуемый ZIP сохраняется побайтно без переупаковки после этой проверки.
+- SHA-256 ZIP: `ed34889048b5128343f2bc34cf7aba821dd0b6a586031d471f0dc42c4941857f`. `windows-native-proof.json` связывает результат с checksum архива и точным native run. Последующий release commit меняет только документацию; CI source commit сохраняется отдельно.
+- Проверка использует изолированные профили, намеренный отказ перед стартом backend и enforced outbound block для точного EXE. Она не получает пользовательские конфиги/аудио, не включает микрофон и не вызывает модельные/речевые сервисы. SDK-проба использует настоящий public SDK и локальный clipboard IPC. DOM-проверка подтверждает смонтированную enabled-кнопку с геометрической видимостью, но не hit-testing через намеренный boot-error modal и не запись звука.
+- Исходные failed epochs native-harness сохранены. Исправлены чтение строковых enforcement statuses, полнота искусственных Windows known folders и штатное закрытие перед повторным запуском вместо немедленного taskkill. SDK/composer/packaging/CDP guards не ослаблялись. Независимый обзор delivery diff не нашёл блокеров.
+
+**Не подтверждено:** физический микрофон и доставка в конкретный пользовательский старый/переименованный чат. `actualUserDeliveryVerified` остаётся `false`. Сборка unsigned; Windows или корпоративная политика может запретить запуск.
 
 Ниже сохранены результаты предыдущих этапов. Они не подменяют Windows gate нового выпуска или проверку пользовательского микрофона/чата.
 
