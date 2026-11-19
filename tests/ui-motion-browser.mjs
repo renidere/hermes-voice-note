@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
@@ -28,7 +28,7 @@ const route = {connectionId:'fixture',profile:'default'};
 export const control = {phase:()=>{},sends:[],formSubmits:0,offline:true};
 export const host = {
  state:{focusedSessionId:{get:()=> 'live'},focusedStoredSessionId:{get:()=> 'stored'},focusedSessionOwner:{get:()=> route}},
- profileRoutes:()=>new Promise(resolve=>{control.grantRoutes=()=>resolve([route]);}),
+ profileRoutes:async()=>[route],
  retainProfile:()=>new Promise(resolve=>{control.finishRetain=()=>resolve(()=>{});}),
  requestProfile:async(_route,method)=>{if(method==='session.resume')return {session_id:'resumed'};if(control.offline)throw new Error('Fixture offline');return {attached:true,ref_text:'@file:attachments/ui.wav'};},
  composer:{submit:(id,text)=>{control.sends.push({id,text});return true;}},notify(){}
@@ -38,6 +38,10 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import plugin from 'voice-plugin';
 import {control} from '@hermes/plugin-sdk';
+const getUserMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+navigator.mediaDevices.getUserMedia=(...args)=>new Promise((resolve,reject)=>{
+ control.grantCapture=()=>getUserMedia(...args).then(resolve,reject);
+});
 const contributions=[],dispose=[];
 plugin.register({register:c=>contributions.push(c),onDispose:fn=>dispose.push(fn)});
 const element=contributions[0].render();
@@ -47,6 +51,7 @@ window.fixture=control;
 document.querySelector('form').addEventListener('submit',e=>{e.preventDefault();control.formSubmits++;});
 createRoot(document.querySelector('#voice')).render(element);`;
 const built = await build({ stdin: { contents: entry, resolveDir: hermes, loader: 'jsx' }, bundle: true, write: false, format: 'esm', jsx: 'automatic',
+  nodePaths: process.env.NODE_PATH?.split(delimiter).filter(Boolean) || [],
   plugins: [{ name: 'local-fixtures', setup(b) {
     b.onResolve({ filter: /^voice-plugin$/ }, () => ({ path: 'plugin', namespace: 'fixture' }));
     b.onResolve({ filter: /^@hermes\/plugin-sdk$/ }, () => ({ path: 'sdk', namespace: 'fixture' }));
@@ -131,7 +136,7 @@ try {
       assert.notEqual(animation.name,'none','State changes need a calm fade');
       assert.ok(parseFloat(animation.duration)>0 && parseFloat(animation.duration)<=0.25,'Fade must be short and calm');
     } else assert.equal(animation.name,'none','Reduced motion must disable the fade');
-    await evaluate('fixture.grantRoutes()');
+    await evaluate('fixture.grantCapture()');
     await wait(`fixture.voice.state.get().phase==='recording'`);
     const recording=await evaluate(`(()=>{const dot=document.querySelector('.hermes-voice-note__dot');window.label=primary.firstElementChild;window.live=document.querySelector('[role="status"]');window.visual=document.querySelector('.hermes-voice-note__status');return {dot:dot?getComputedStyle(dot).backgroundColor:null,token:getComputedStyle(document.documentElement).getPropertyValue('--ui-red').trim(),status:live.textContent,box:box()};})()`);
     assert.ok(recording.dot && recording.dot!=='rgba(0, 0, 0, 0)','Recording dot must resolve to a visible theme red');
@@ -157,7 +162,7 @@ try {
     await evaluate('fixture.finishRetain()');
     await wait(`fixture.voice.state.get().phase==='ready'`);
     assert.equal(await evaluate(`!!document.querySelector('.hermes-voice-note__dot')`),false);
-    assert.ok(await evaluate(`document.querySelector('[role="alert"]').textContent.includes('осталась')`),'Retry must retain the existing error UX');
+    assert.ok(await evaluate(`document.querySelector('[role="alert"]').textContent.includes('сохранена')`),'Retry must retain the existing error UX');
     await screenshot(`${motion}-retry.png`);
     const dimensions=await evaluate(`({idle:idleBox,ready:box()})`);
     for(const [phase,box] of Object.entries({recording:recording.box,ready:dimensions.ready})) {

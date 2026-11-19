@@ -119,6 +119,121 @@ test('an existing chat can record without a live runtime and sends to its captur
 });
 
 
+test('microphone capture starts even when the chat owner is temporarily unavailable', async () => {
+  const { host, focus, calls } = fakeHost();
+  focus.owner = null;
+  host.profileRoutes = async () => { throw new Error('Route inventory must not run during capture'); };
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start();
+    assert.equal(voice.state.get().phase, 'recording');
+    feed(capture);
+    assert.ok(voice.chunks.length);
+    assert.deepEqual(calls, []);
+  } finally { voice.cancel(); }
+  assert.equal(capture.tracksStopped, 1);
+});
+
+
+test('route failure happens only on Send and retains the WAV for a successful retry', async () => {
+  const { host, calls, route } = fakeHost();
+  let routesRead = 0;
+  host.profileRoutes = async () => { routesRead++; throw new Error('Route inventory offline'); };
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start();
+    assert.equal(voice.state.get().phase, 'recording');
+    assert.equal(routesRead, 0);
+    feed(capture);
+    await assert.rejects(voice.send(), /Route inventory offline/);
+    const recorded = Buffer.from(await voice.blob.arrayBuffer());
+    assert.equal(voice.state.get().phase, 'ready');
+    assert.equal(capture.tracksStopped, 1);
+    assert.equal(routesRead, 1);
+    assert.equal(calls.some(([name]) => name === 'submit' || name === 'file.attach'), false);
+    host.profileRoutes = async () => [route];
+    await voice.send();
+    const uploaded = calls.find(([name]) => name === 'file.attach');
+    assert.deepEqual(Buffer.from(uploaded[1].data_url.split(',')[1], 'base64'), recorded);
+    assert.equal(calls.filter(([name]) => name === 'submit').length, 1);
+  } finally { voice.cancel(); }
+});
+
+
+test('delivery reports the failing stage and preserves the recording without guessing a server', async () => {
+  const cases = [
+    { setup(host, focus) { focus.owner = null; }, message: /владелец исходного чата не определён/i },
+    { setup(host) { host.profileRoutes = async () => { throw new Error('private-route-failure'); }; }, message: /получить список серверов/i },
+    { setup(host) { host.profileRoutes = async () => []; }, message: /сервер исходного чата недоступен/i },
+    { setup(host) { host.retainProfile = async () => { throw new Error('private-connect-failure'); }; }, message: /подключиться к серверу/i },
+    { setup(host) { host.requestProfile = async () => { throw new Error('private-resume-failure'); }; }, message: /открыть исходный чат/i },
+  ];
+  for (const scenario of cases) {
+    const { host, focus, calls } = fakeHost();
+    scenario.setup(host, focus);
+    const { env, capture } = fakeAudio();
+    const voice = new (await loadPlugin(env)).VoiceNote(host);
+    try {
+      await voice.start(); feed(capture);
+      await assert.rejects(voice.send());
+      assert.equal(voice.state.get().phase, 'ready');
+      assert.ok(voice.blob.size > 44);
+      assert.match(voice.state.get().error, scenario.message);
+      assert.match(voice.state.get().error, /запись сохранена/i);
+      assert.equal(voice.state.get().error.includes('private-'), false);
+      assert.equal(calls.some(([name]) => name === 'file.attach' || name === 'submit'), false);
+      assert.equal(capture.tracksStopped, 1);
+    } finally { voice.cancel(); }
+  }
+});
+
+
+test('capture failures identify the microphone stage without mentioning the server', async () => {
+  const cases = [
+    { name: 'NotAllowedError', message: /нет доступа к микрофону/i },
+    { name: 'NotFoundError', message: /микрофон не найден/i },
+    { name: 'NotReadableError', message: /микрофон занят или недоступен/i },
+    { dsp: true, message: /не отключил автоматическую обработку/i },
+    { context: true, message: /настроить запись с микрофона/i },
+  ];
+  for (const scenario of cases) {
+    const { host, calls } = fakeHost();
+    const { env } = fakeAudio();
+    if (scenario.name) env.navigator.mediaDevices.getUserMedia = async () => {
+      const error = new Error('private-device-detail'); error.name = scenario.name; throw error;
+    };
+    if (scenario.dsp) env.navigator.mediaDevices.getUserMedia = async () => ({
+      getTracks: () => [{ stop() {} }], getAudioTracks: () => [{ getSettings: () => ({ autoGainControl: true }) }],
+    });
+    if (scenario.context) env.AudioContext.prototype.createMediaStreamSource = () => { throw new Error('private-device-detail'); };
+    const voice = new (await loadPlugin(env)).VoiceNote(host);
+    await assert.rejects(voice.start());
+    assert.equal(voice.state.get().phase, 'idle');
+    assert.match(voice.state.get().error, scenario.message);
+    assert.doesNotMatch(voice.state.get().error, /сервер|подключение к чату|private-/i);
+    assert.equal(calls.filter(([name, value]) => name === 'notify' && value.kind === 'error').length, 1);
+    voice.cancel();
+  }
+});
+
+
+test('a refreshed or renamed chat cannot mutate the captured delivery owner', async () => {
+  const { host, focus, calls, route } = fakeHost();
+  const { env, capture } = fakeAudio();
+  const voice = new (await loadPlugin(env)).VoiceNote(host);
+  try {
+    await voice.start(); feed(capture);
+    focus.owner.connectionId = 'other-source';
+    focus.owner.profile = 'other-profile';
+    await voice.send();
+    assert.equal(calls.find(([name]) => name === 'session.resume')[2], route);
+    assert.deepEqual(calls.find(([name]) => name === 'submit'), ['submit', 'stored-a', '@file:attachments/voice.wav']);
+  } finally { voice.cancel(); }
+});
+
+
 test('cancelling while microphone permission is pending closes the late stream without uploading', async () => {
   const { host, calls } = fakeHost();
   const { env, capture } = fakeAudio();

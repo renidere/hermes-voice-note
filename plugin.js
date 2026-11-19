@@ -57,32 +57,30 @@ export class VoiceNote {
     this.level.set(0);
     this.levelAt = -Infinity;
     const generation = ++this.generation;
+    const owner = this.host.state.focusedSessionOwner.get();
     const target = this.target = {
       stored: this.host.state.focusedStoredSessionId.get(),
-      owner: this.host.state.focusedSessionOwner.get(),
+      owner: owner ? { connectionId: owner.connectionId, profile: owner.profile } : null,
     };
     this.update({ phase: 'starting', error: '' });
+    let message = 'Не удалось получить доступ к микрофону. Повтори запись.';
     try {
       // shortcut: existing chats only; extend when the SDK exposes first-message attachment staging.
       if (!target.stored) {
         this.update({ phase: 'idle', error: 'Открой существующий чат перед записью.' });
         return;
       }
-      if (!target.owner) throw new Error('Не удалось определить владельца чата');
-      const routes = (await this.host.profileRoutes()).filter(route =>
-        route.connectionId === target.owner.connectionId && route.profile === target.owner.profile);
-      if (generation !== this.generation) return;
-      if (routes.length !== 1) throw new Error('Не удалось определить сервер этого чата');
-      this.target.route = routes[0];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: {
         channelCount: { ideal: 2 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false,
       } });
       if (generation !== this.generation) { stream.getTracks().forEach(track => track.stop()); return; }
       this.stream = stream;
       const settings = stream.getAudioTracks?.()[0]?.getSettings?.() || {};
+      message = 'Микрофон не отключил автоматическую обработку звука. Проверь настройки устройства.';
       if (['echoCancellation', 'noiseSuppression', 'autoGainControl'].some(key => settings[key] === true)) {
         throw new Error('Микрофон не отключил автоматическую обработку звука');
       }
+      message = 'Не удалось настроить запись с микрофона. Повтори запись.';
       this.context = new AudioContext();
       await this.context.resume();
       if (generation !== this.generation) return;
@@ -118,10 +116,10 @@ export class VoiceNote {
       this.limitTimer?.unref?.();
     } catch (error) {
       if (generation !== this.generation) return;
+      if (!this.stream && error?.name === 'NotAllowedError') message = 'Нет доступа к микрофону. Разреши его использование в настройках системы и Hermes.';
+      if (!this.stream && error?.name === 'NotFoundError') message = 'Микрофон не найден. Подключи или выбери устройство ввода.';
+      if (!this.stream && error?.name === 'NotReadableError') message = 'Микрофон занят или недоступен. Проверь устройство и другие приложения.';
       this.releaseCapture();
-      const message = error?.name === 'NotAllowedError'
-        ? 'Нет доступа к микрофону. Разреши его использование в Windows и Hermes.'
-        : 'Не удалось начать запись. Проверь микрофон и подключение к чату.';
       this.update({ phase: 'idle', error: message });
       throw error;
     }
@@ -170,14 +168,28 @@ export class VoiceNote {
     if (!this.blob) throw new Error('В записи пока нет звука');
     this.update({ phase: 'sending', error: '' });
     let release;
+    let message = 'Владелец исходного чата не определён. Desktop не сообщил безопасный маршрут отправки.';
     try {
+      if (!target.owner) throw new Error('Не удалось определить владельца чата');
+      message = 'Не удалось получить список серверов. Проверь подключение и повтори отправку.';
+      const routes = (await this.host.profileRoutes()).filter(route =>
+        route.connectionId === target.owner.connectionId && route.profile === target.owner.profile);
+      if (generation !== this.generation) return;
+      message = routes.length === 0
+        ? 'Сервер исходного чата недоступен. Восстанови подключение и повтори отправку.'
+        : 'Desktop неоднозначно определил сервер исходного чата. Открой этот чат заново.';
+      if (routes.length !== 1) throw new Error('Не удалось определить сервер этого чата');
+      target.route = routes[0];
+      message = 'Не удалось подключиться к серверу. Повтори отправку после восстановления связи.';
       release = await this.host.retainProfile(target.route, { spawnPriority: 'foreground' });
       if (generation !== this.generation) return;
+      message = 'Не удалось открыть исходный чат на сервере. Повтори отправку.';
       const resumed = await this.host.requestProfile(target.route, 'session.resume', {
         session_id: target.stored, omit_messages: true,
       });
       if (generation !== this.generation) return;
       if (typeof resumed.session_id !== 'string' || !resumed.session_id) throw new Error('Чат недоступен');
+      message = 'Не удалось подготовить аудио к отправке. Повтори отправку.';
       const dataUrl = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
@@ -185,20 +197,23 @@ export class VoiceNote {
         reader.readAsDataURL(this.blob);
       });
       if (generation !== this.generation) return;
+      message = 'Не удалось загрузить аудио на сервер. Повтори отправку.';
       const uploaded = await this.host.requestProfile(target.route, 'file.attach', {
         session_id: resumed.session_id, name: `voice-${Date.now()}.wav`, data_url: dataUrl,
       }, 120000);
       if (generation !== this.generation) return;
+      message = 'Сервер не подтвердил получение аудио. Повтори отправку.';
       if (uploaded.attached !== true || typeof uploaded.ref_text !== 'string' || !uploaded.ref_text.startsWith('@file:')) {
         throw new Error('Сервер не принял аудио');
       }
+      message = 'Вернись в исходный чат и повтори отправку.';
       if (!this.host.composer.submit(target.stored, uploaded.ref_text)) throw new Error('Вернись в исходный чат и повтори отправку');
       this.blob = null;
       this.update({ phase: 'idle' });
       this.host.notify({ kind: 'success', message: 'Аудио передано в очередь чата' });
     } catch (error) {
       if (generation !== this.generation) return;
-      this.update({ phase: this.blob ? 'ready' : 'idle', error: 'Отправка не завершена. Запись осталась для повтора.' });
+      this.update({ phase: this.blob ? 'ready' : 'idle', error: `${message} Запись сохранена.` });
       throw error;
     } finally { release?.(); }
   }
