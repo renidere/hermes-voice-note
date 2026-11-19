@@ -1,12 +1,26 @@
-# Проверки комплекта 0.4.0
+# Проверки комплекта 0.4.1
 
-## Что поставляется
+## Windows-сборка 0.4.1
+
+Выпуск добавляет portable-клиент Windows x64 с полным SDK/composer patch. Сам `plugin.js` не изменён относительно квалифицированного 0.4.0: изменён канал доставки совместимого клиента, а не ослаблены требования SDK или сохранность WAV.
+
+- GitHub Actions run **44558929604**, workflow commit **2077a0b92e06bdca582088117b0603cedf480839**, стандартный Windows 2025 runner.
+- **76/76 SDK tests** (три suites, включая 19 session-lease checks), **101/101 composer tests**, **35/35 plugin unit tests** — PASS на Windows. Наборы не суммируются с прежними Linux-проверками как уникальные tests.
+- Штатные Desktop build и упаковка **unsigned Windows x64 ZIP** — PASS. В package проверены PE x64 executable, наличие нового SDK в упакованном renderer и точные hashes всех SDK/composer исходников до и после build.
+- Windows dependency acquisition и packaging tools выполнялись без signing secrets и пользовательских profile/config/audio. SDK/composer tests запускались с network-deny preload; plugin tests используют fixture SDK/audio и не вызывают модель.
+- Используется существующий вариант **Hermes Light** с commit identity `3b42157`: отдельное имя приложения, remote-only backend и отключённый stable update feed. Upstream base и patch hash закреплены в `windows-client-source.json`; в build stamp сохраняется dirty-признак применённого source patch.
+- Скачанный CI ZIP проверен повторно вне runner. Для публикации добавляются лицензии, инструкция и отдельная копия `plugin.js`; исходные файлы Windows-приложения должны остаться побайтно неизменными. `windows-build.json` различает исходный CI package hash и hash публикуемого ZIP.
+- Первый workflow был отклонён до runner из-за недоступного `runner` context в job.env. Следующий успешно прошёл tests/build, но упаковка отказала из-за разделённого pnpm аргумента `-c`. Оба failed runs сохранены; исправлены только workflow context и передача аргументов. Защитные проверки core packager не отключались.
+
+**Не подтверждено:** запуск конкретного пользовательского окна, микрофон, реальный старый/переименованный чат и backend/model delivery. ZIP не является официально подписанным MSIX. Windows CI unit/build/package PASS не называется пройденной пользовательской приёмкой.
+
+## Состав исходного парного комплекта
 
 `plugin.js` и patch клиента `install/hermes-desktop-session-transport.patch`. Нужен Desktop с новым `host.retainSession` и исправленным подтверждением composer; одна переустановка плагина не устанавливает SDK. Прежний небезопасный путь отправки удалён. На старом SDK запись не предлагается: показывается требование обновления клиента.
 
 SDK-метод переиспользует штатные native resolver, request router, ambiguity guard и удержание gateway. Плагин фиксирует исходный stored ID и копирует известного owner до первого await; отсутствие owner разрешается native-методом при каждом явном Send. Ошибка сохраняет WAV в памяти, а отмена не отправляет поздний ответ upload.
 
-## Выполненные проверки
+## Исторические source/fixture-проверки 0.4.0
 
 - **35/35 plugin unit tests**, без fail/skip. Настоящий ESM-модуль, fixture SDK/audio boundaries. Добавлены owner-null → native lease → исходный chat, byte-identical retry, поздний lease после отмены, сохранение известного owner, отказ старого SDK до записи и сохранение WAV после отказа composer. Fixtures переведены на новый SDK-контракт; старый путь маршрутизации из runtime удалён.
 - **19/19 SDK checks**: 18 behavioral-кейсов настоящего `session-request.ts` с настоящими native router/guard и контролируемыми owner lookup/transport seams; 1 AST-проверка экспорта `host.retainSession`. AST-проверка не называется полным импортом SDK.
@@ -26,7 +40,7 @@ SDK-метод переиспользует штатные native resolver, requ
 
 - Store/async REST-discovery владельца и pooled-socket I/O в совместном HTTP gate заменены явно заданными адаптерами. Native sync owner ladder/router/guard и сам SDK lease исполняются настоящие.
 - `composer.submit === true` доказывает UI handoff, не backend delivery, ответ модели или итоговое появление сообщения в реальном Windows-чате.
-- Полный импорт SDK, renderer build и TypeScript проверены, но установщик и запуск Electron/Windows не проверены. SDK patch ещё не активирован в клиенте пользователя. Правки линтера сохраняют нормализованный JavaScript; подмена assertion специально проверена как отрицательный control.
+- На этапе 0.4.0 полный импорт SDK, renderer build и TypeScript были проверены без Windows-упаковки. В 0.4.1 ZIP собран на Windows, но запуск конкретного пользовательского окна и активация SDK у пользователя по-прежнему не подтверждены. Правки линтера сохраняют нормализованный JavaScript; подмена assertion специально проверена как отрицательный control.
 - Нативный сценарий старого/переименованного чата на конкретном Windows/Electron требует установки нового клиента и проверки там. Нельзя считать его пройденным по Linux/fixture результатам.
 - Нет гарантии отсутствия аппаратного DSP, ресемплинга браузера, аналогового клиппинга или потери WAV при закрытии приложения. WAV остаётся в RAM до успешного handoff или явной отмены.
 - Не проверены все сетевые/OS-crash сценарии. Нет серверной установки или нового Python backend.

@@ -4,9 +4,11 @@
 
 ## Установка
 
-Нужен **Hermes Desktop** с SDK API `focusedSessionOwner`, `retainSession` и `composer.submit` с подтверждением принятия сообщения нативным composer. Плагин устанавливается на машину с Desktop, даже если backend удалённый.
+Для **native Windows-клиента с удалённым Linux backend** подготовлен отдельный portable-клиент с нужным SDK: [WINDOWS-CLIENT.ru.md](WINDOWS-CLIENT.ru.md). Нужен именно совместимый renderer с `focusedSessionOwner`, `retainSession` и `composer.submit` с подтверждением принятия сообщения. Переустановка плагина не обновляет встроенный SDK прежнего клиента.
 
-**Этот выпуск требует изменения SDK клиента из комплекта.** Patch `install/hermes-desktop-session-transport.patch` добавляет session-aware транспорт и исправляет подтверждение приёма сообщения composer. Порядок обновления — [SDK-UPDATE.ru.md](SDK-UPDATE.ru.md). Одна переустановка плагина не обновляет старый Desktop. Без нового API плагин сообщает требование обновления до появления кнопки записи; небезопасного старого пути отправки в 0.4.0 нет.
+**Для Webapp в браузере** плагин устанавливается на обслуживающий host, но SDK patch должен быть собран в фактически обслуживаемый Webapp renderer. Копирование исходников на сервер или перезапуск Python сами по себе не обновляют уже загруженный SDK.
+
+Полный source patch `install/hermes-desktop-session-transport.patch` добавляет session-aware транспорт и исправляет подтверждение приёма сообщения composer. Инструкция сборки из исходников — [SDK-UPDATE.ru.md](SDK-UPDATE.ru.md). Без нужного SDK плагин сообщает требование обновления до появления кнопки; небезопасного старого пути отправки нет.
 
 1. Открой **Capabilities → Plugins → Install from Git**.
 2. Укажи `https://github.com/renidere/hermes-voice-note`.
