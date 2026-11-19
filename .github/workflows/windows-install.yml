@@ -1,0 +1,81 @@
+name: Windows automatic voice-note installation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-install-delivery]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-voice-install-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-install:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: voice-note
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 26.7.0
+      - id: test-installer
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File voice-note/tests/windows-install.ps1
+      - id: test-source
+        working-directory: voice-note
+        run: |
+          python tests/windows_package_test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test tests/delivery-entrypoint.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: download-client
+        run: |
+          $pin = Get-Content voice-note/install/windows-delivery-base.json -Raw | ConvertFrom-Json
+          Invoke-WebRequest $pin.url -OutFile client-base.zip
+          $actual = (Get-FileHash client-base.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $pin.sha256) { throw 'Qualified base client hash mismatch' }
+      - id: package-client
+        run: |
+          python voice-note/scripts/package_windows_delivery.py --base-zip client-base.zip --output delivery/Hermes-Voice-SDK-Windows-x64.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: smoke-native
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File voice-note/tests/windows-native-install-smoke.ps1 -Archive delivery/Hermes-Voice-SDK-Windows-x64.zip -OutputDirectory delivery/native-proof
+      - id: verify-package
+        run: |
+          $pin = Get-Content voice-note/install/windows-delivery-base.json -Raw | ConvertFrom-Json
+          $version = (Get-Content voice-note/package.json -Raw | ConvertFrom-Json).version
+          $proof = Get-Content delivery/native-proof/result.json -Raw | ConvertFrom-Json
+          if (-not $proof.passed -or -not $proof.nativeSdkVerified) { throw 'Native Windows installation or SDK check did not pass' }
+          $hash = (Get-FileHash delivery/Hermes-Voice-SDK-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Hermes-Voice-SDK-Windows-x64.zip" | Set-Content delivery/WINDOWS-SHA256SUMS -Encoding utf8NoBOM
+          $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; runId=$env:GITHUB_RUN_ID; clientBuildRunId=$pin.clientBuildRunId; clientVersion=$pin.clientVersion; deliveryVersion=$version; basePackageSha256=$pin.sha256; packageSha256=$hash; automaticInstall=$true; nativeSdkVerified=$true; actualUserDeliveryVerified=$false }
+          $receipt | ConvertTo-Json | Set-Content delivery/windows-build.json -Encoding utf8NoBOM
+          Copy-Item voice-note/install/windows-client-source.json delivery/windows-client-source.json
+      - id: upload-package
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-voice-auto-install
+          path: delivery/*
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve isolated native smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-native-failure
+          path: delivery/native-proof/*
+          if-no-files-found: ignore
+          retention-days: 3
