@@ -1,0 +1,59 @@
+name: Windows firewall guard diagnostic
+on:
+  push:
+    branches: [windows-firewall-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - name: Observe firewall metadata and actual blocking
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('voice-firewall-' + [guid]::NewGuid().ToString('N'))
+          New-Item $root -ItemType Directory | Out-Null
+          $exe = Join-Path $root 'hermes-light-3b42157.exe'
+          $id = 'VoiceGuard-' + [guid]::NewGuid().ToString('N')
+          $source = @'
+          using System;
+          using System.Net.Sockets;
+          public static class Probe {
+            public static int Main() {
+              using (var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)) {
+                try {
+                  var a = s.BeginConnect("github.com", 443, null, null);
+                  if (!a.AsyncWaitHandle.WaitOne(5000)) { Console.WriteLine("TIMEOUT"); return 2; }
+                  s.EndConnect(a); Console.WriteLine("CONNECTED"); return 0;
+                } catch (SocketException e) { Console.WriteLine("SOCKET:" + e.ErrorCode); return e.ErrorCode; }
+              }
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $source -OutputAssembly $exe -OutputType ConsoleApplication
+          $healthy = & $exe
+          $healthyCode = $LASTEXITCODE
+          $rows = @()
+          try {
+            New-NetFirewallRule -Name $id -DisplayName $id -Direction Outbound -Action Block -Program $exe -Profile Any -Enabled True | Out-Null
+            foreach ($attempt in 1..3) {
+              $r = Get-NetFirewallRule -PolicyStore ActiveStore -Name $id
+              $es = @($r.EnforcementStatus)
+              $rows += [ordered]@{
+                attempt=$attempt; profile=[string]$r.Profile; profileType=$r.Profile.GetType().FullName
+                profileAny=($r.Profile -eq 'Any'); primary=[string]$r.PrimaryStatus; primaryOK=($r.PrimaryStatus -eq 'OK')
+                enforcement=[string]$r.EnforcementStatus; enforcementPropertyType=$r.EnforcementStatus.GetType().FullName
+                enforcementCount=$es.Count; enforcementFirst=[string]$es[0]; enforcementFirstInt=[int]$es[0]
+                sourceGuardFirstInt=[int]$r.EnforcementStatus[0]; sourceGuard=($r.Profile -eq 'Any' -and $r.PrimaryStatus -eq 'OK' -and $es.Count -eq 1 -and [int]$r.EnforcementStatus[0] -eq 1)
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            $blocked = & $exe
+            $blockedCode = $LASTEXITCODE
+          } finally { Get-NetFirewallRule -Name $id -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
+          $recovered = & $exe
+          $recoveredCode = $LASTEXITCODE
+          [ordered]@{ healthy=$healthy; healthyCode=$healthyCode; blocked=$blocked; blockedCode=$blockedCode; recovered=$recovered; recoveredCode=$recoveredCode; rules=$rows } | ConvertTo-Json -Depth 6
+          if ($healthyCode -ne 0 -or $recoveredCode -ne 0 -or $blockedCode -ne 10013) { throw 'Network guard control did not establish healthy-blocked-recovered behavior' }
