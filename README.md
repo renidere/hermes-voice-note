@@ -1,3 +1,12 @@
+<!-- sound-scout-direction-warning:start -->
+> [!WARNING]
+> **Это направление больше не целевое.** Отдельный Windows EXE (Hermes Light, `Start-Voice-Note.cmd`) и второй профиль Hermes со своими `HERMES_HOME` и `userData` — не целевой путь. Плагин v0.4.0–v0.4.2 требует `host.retainSession`, которого нет в штатном Hermes Desktop Plugin SDK, поэтому в штатном клиенте он не работает.
+>
+> Целевое направление — один плагин `sound-scout` в репозитории [renidere/sound-scout-plugin](https://github.com/renidere/sound-scout-plugin). Он должен работать в штатном Hermes Desktop только на штатных вызовах Desktop Plugin SDK (`profileRoutes`, `retainProfile`, `session.resume`, `file.attach`), без `host.retainSession`, отдельного EXE, форка Hermes, второго профиля и второго клиента. Рекордер переносится туда из v0.4.2. Обоснование — [решение 0013](https://github.com/renidere/sound-scout-plugin/blob/main/docs/decisions/0013-voice-note-integration.md), ход работ — [эпик #92](https://github.com/renidere/sound-scout-plugin/issues/92); новый плагин ещё в разработке.
+>
+> Этот репозиторий, его выпуски и их файлы остаются доступны, ничего не удаляется. Текст ниже описывает прежнее направление и сохранён без изменений.
+<!-- sound-scout-direction-warning:end -->
+
 # Hermes Voice Note
 
 Голосовые вложения прямо в Hermes Desktop: **«Записать» → отправить**, рядом отмена. В ожидании — одна небольшая кнопка с нативной иконкой; во время записи — короткая группа с красной точкой, таймером, тремя штрихами входного сигнала и кнопками-иконками отправки/отмены. Без отдельного рекордера, предварительного распознавания и собственного backend. Плавные переходы учитывают системное уменьшение движения.
